@@ -1,0 +1,10 @@
+{
+  "name": "kage",
+  "version": "0.1.0",
+  "description": "pi extension: spin off a memory-carrying shadow clone of your session to work in parallel, then merge it back",
+  "keywords": ["pi", "pi-extension", "coding-agent", "git", "worktree", "parallel"],
+  "license": "MIT",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
