@@ -1,5 +1,5 @@
 {
-  "name": "@kid7st/kage",
+  "name": "pi-kage",
   "version": "0.1.0",
   "description": "🥷 Shadow Clone Jutsu for your git repo: copy it into an isolated folder, work in parallel with pi, then merge the session memory back",
   "keywords": [
@@ -33,7 +33,6 @@
     "node": ">=18"
   },
   "publishConfig": {
-    "access": "public",
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
