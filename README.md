@@ -46,10 +46,16 @@ can't check out the same branch twice, you share stash/refs, and you get a *fres
 ## Install
 
 ```bash
+# npm
 npm install -g pi-kage     # then use `kage` anywhere
-# or, no install:
-npx pi-kage
+npx pi-kage                # or run without installing
+
+# or install script (no npm needed — kage is a single, zero-dependency Node script)
+curl -fsSL https://raw.githubusercontent.com/kid7st/kage/main/install.sh | sh
 ```
+
+The install script drops the single `kage` file into `~/.local/bin` (override with `KAGE_BIN_DIR`,
+pin a version with `KAGE_VERSION`). kage has **no dependencies** — it only needs Node, git, and pi.
 
 From source:
 

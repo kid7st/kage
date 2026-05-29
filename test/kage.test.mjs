@@ -41,10 +41,13 @@ test("--help prints usage", () => {
 	assert.match(r.stderr, /kage finish/);
 });
 
-test("--version prints the package version", () => {
+test("--version prints the package version and stays in sync", () => {
 	const r = run(["--version"]);
 	assert.equal(r.status, 0);
 	assert.match(r.stderr, /\d+\.\d+\.\d+/);
+	// the embedded VERSION constant must match package.json (single-file installs have no package.json)
+	const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+	assert.equal(r.stderr.trim(), pkg.version);
 });
 
 test("errors outside a git repo", () => {

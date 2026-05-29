@@ -28,6 +28,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import readline from "node:readline";
 
+const VERSION = "0.2.1"; // keep in sync with package.json (enforced by test)
 const MARKER = ".kage.json";
 const SESSIONS = process.env.KAGE_SESSIONS_DIR || join(homedir(), ".pi", "agent", "sessions");
 
@@ -702,7 +703,7 @@ async function main() {
 			return info(HELP);
 		case "-v":
 		case "--version":
-			return info(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
+			return info(VERSION);
 		default:
 			return cmdNew(process.argv.slice(2)); // unknown subcommand -> treat as `kage <path>`
 	}
