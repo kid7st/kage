@@ -100,6 +100,38 @@ test("new --blank creates a clone, list shows it, finish removes it", () => {
 	}
 });
 
+test("finish --push pushes the branch then finishes", () => {
+	const root = tmp();
+	spawnSync("git", ["init", "-q", "--bare", join(root, "remote.git")]);
+	spawnSync("git", ["clone", "-q", join(root, "remote.git"), join(root, "repo")]);
+	const repo = join(root, "repo");
+	spawnSync("git", ["config", "user.email", "t@t.co"], { cwd: repo });
+	spawnSync("git", ["config", "user.name", "t"], { cwd: repo });
+	writeFileSync(join(repo, "a.txt"), "hi\n");
+	spawnSync("git", ["add", "."], { cwd: repo });
+	spawnSync("git", ["commit", "-qm", "init"], { cwd: repo });
+	spawnSync("git", ["push", "-q", "-u", "origin", "HEAD"], { cwd: repo });
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--p1");
+	try {
+		run(["--blank", "--name", "p1"], { cwd: repo, env });
+		// make a committed-but-unpushed change in the clone on a new branch
+		spawnSync("git", ["switch", "-qc", "feat"], { cwd: clone });
+		writeFileSync(join(clone, "b.txt"), "x\n");
+		spawnSync("git", ["add", "."], { cwd: clone });
+		spawnSync("git", ["commit", "-qm", "work"], { cwd: clone });
+
+		const r = run(["finish", "p1", "--push"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.ok(!existsSync(clone), "clone removed");
+		// the branch should now exist on the remote
+		const ls = spawnSync("git", ["ls-remote", "--heads", join(root, "remote.git"), "feat"], { encoding: "utf8" });
+		assert.match(ls.stdout, /refs\/heads\/feat/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("rm discards a clone (with --force)", () => {
 	const root = tmp();
 	const repo = join(root, "repo");

@@ -417,10 +417,37 @@ async function cmdNew(argv) {
 async function cmdFinish(argv) {
 	const { positional, flags } = parseArgs(argv);
 	const force = !!flags.force;
+	const pr = !!flags.pr;
+	const push = pr || !!flags.push; // --pr implies --push
 	const picked = await pickClone("finish", positional[0]);
 	if (!picked) return info("cancelled");
 	const { originRepo, clone } = picked;
 	const insideClone = repoTopLevel(process.cwd()) === clone.dir;
+
+	// Optional convenience: push the branch (and open a PR) before finishing.
+	if (push) {
+		const s = cloneStatus(clone.dir);
+		if (s.dirty) die(`${clone.name} has uncommitted changes — commit them first (kage won't auto-commit)`);
+		if (!s.hasUpstream) {
+			const r = git(clone.dir, ["push", "-u", "origin", s.branch]);
+			if (!r.ok) die(`push failed: ${r.err}`);
+			info(`⬆  pushed ${s.branch} to origin`);
+		} else if (s.ahead > 0) {
+			const r = git(clone.dir, ["push"]);
+			if (!r.ok) die(`push failed: ${r.err}`);
+			info(`⬆  pushed ${s.ahead} commit(s)`);
+		}
+		if (pr) {
+			const existing = prInfo(clone.dir, s.branch);
+			if (existing) {
+				info(`🔗 PR already open: ${existing.url}`);
+			} else {
+				const r = sh("gh", ["pr", "create", "--fill"], { cwd: clone.dir });
+				if (!r.ok) die(`gh pr create failed: ${r.err || r.out || "is gh installed & authed?"}`);
+				info(`🔗 opened PR: ${r.out.split("\n").pop()}`);
+			}
+		}
+	}
 
 	if (!force) {
 		const s = cloneStatus(clone.dir);
@@ -552,7 +579,8 @@ Usage:
   kage [path] [--name <x>] [--blank] [--recent <N>]   clone repo + launch pi
                                                        (no args inside a repo with clones: interactive menu)
   kage list [--pr]                                     dashboard of clones (--pr adds PR status via gh)
-  kage finish [name] [--force]                         check -> merge memory back -> delete clone
+  kage finish [name] [--force] [--push] [--pr]         check -> merge memory back -> delete clone
+                                                       (--push: push first · --pr: push + open a PR via gh)
   kage rm [name] [--force]                             discard a clone without merging
   kage pull <path...>                                  (inside a clone) copy files back to the origin
 

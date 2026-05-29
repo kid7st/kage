@@ -93,6 +93,7 @@ kage                       # no args inside a repo with clones -> interactive me
 kage list                  # status dashboard: branch · dirty · ahead/behind · safe-to-clean
 kage list --pr             # also show PR state (via gh)
 kage finish fix-login      # check → merge memory back → delete the clone
+kage finish fix-login --pr # push the branch + open a PR (via gh), then finish
 kage finish --force        # skip the uncommitted/unpushed guard
 kage rm old-experiment     # discard a clone without merging (refuses if it has local-only work)
 
@@ -110,7 +111,7 @@ the same picker when you have multiple clones and don't name one.
 |---|---|---|
 | `kage [path] [--name x] [--blank] [--recent N]` | origin repo | Copy the repo to `../<repo>--<name>` (default `kage-<ts>`), seed the clone's pi session with the last N turns (default 5; `--blank` for none), and launch `pi -c`. With no args (and existing clones) it opens an interactive picker. |
 | `kage list [--pr]` | origin repo | Status dashboard of clones: branch, dirty/clean, ahead/behind upstream, and a “safe to clean” flag. `--pr` adds PR state via `gh`. |
-| `kage finish [name] [--force]` | origin (or inside the clone) | Refuse if the clone has uncommitted or unpushed work (`--force` overrides), merge its session memory back (deduped), then delete the clone. Auto-selects / prompts when there are several. |
+| `kage finish [name] [--force] [--push] [--pr]` | origin (or inside the clone) | Refuse if the clone has uncommitted or unpushed work (`--force` overrides), merge its session memory back (deduped), then delete the clone. `--push` pushes the branch first; `--pr` pushes and opens a PR via `gh`. Auto-selects / prompts when there are several. |
 | `kage rm [name] [--force]` | origin (or inside the clone) | Discard a clone **without** merging memory. Refuses if it has local-only work unless `--force`. For abandoned experiments. |
 | `kage pull <path...>` | inside a clone | Copy specific files/dirs (even gitignored ones) back to the origin at the same relative path. |
 | `kage --help` / `--version` | anywhere | Usage / version. |
