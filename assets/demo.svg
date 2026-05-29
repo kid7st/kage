@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 400" width="860" height="400" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace" font-size="14">
+  <style>
+    .win { fill:#0d1117; stroke:#30363d; stroke-width:1; }
+    text { fill:#e6edf3; white-space:pre; }
+    .dim   { fill:#8b949e; }
+    .green { fill:#56d364; }
+    .blue  { fill:#58a6ff; }
+    .yellow{ fill:#e3b341; }
+    .comment{ fill:#6e7681; font-style:italic; }
+    .purple{ fill:#bc8cff; }
+    .l { opacity:0; }
+    .l1 { animation: a1 14s infinite; }
+    .l3 { animation: a3 14s infinite; }
+    .l4 { animation: a4 14s infinite; }
+    .l5 { animation: a5 14s infinite; }
+    .l6 { animation: a6 14s infinite; }
+    .l7 { animation: a7 14s infinite; }
+    .l9 { animation: a9 14s infinite; }
+    .l11{ animation: a11 14s infinite; }
+    .l12{ animation: a12 14s infinite; }
+    @keyframes a1  {0%,3%{opacity:0}  5%{opacity:1}  96%{opacity:1} 100%{opacity:0}}
+    @keyframes a3  {0%,9%{opacity:0}  11%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a4  {0%,12%{opacity:0} 14%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a5  {0%,15%{opacity:0} 17%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a6  {0%,18%{opacity:0} 20%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a7  {0%,21%{opacity:0} 23%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a9  {0%,30%{opacity:0} 32%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a11 {0%,43%{opacity:0} 45%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a12 {0%,49%{opacity:0} 51%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+  </style>
+
+  <rect class="win" x="1" y="1" width="858" height="398" rx="10"/>
+  <circle cx="24" cy="24" r="6" fill="#ff5f56"/>
+  <circle cx="44" cy="24" r="6" fill="#ffbd2e"/>
+  <circle cx="64" cy="24" r="6" fill="#27c93f"/>
+  <text x="430" y="29" text-anchor="middle" class="dim">kage 🥷 — Shadow Clone Jutsu</text>
+  <line x1="1" y1="46" x2="859" y2="46" stroke="#30363d" stroke-width="1"/>
+
+  <text class="l l1"  x="20" y="84"><tspan class="green">~/code/my-app</tspan> <tspan class="dim">$</tspan> kage --name fix-login</text>
+
+  <text class="l l3 blue"   x="20" y="134">🥷 Shadow clone ready: ../my-app--fix-login</text>
+  <text class="l l4 dim"    x="20" y="159">   origin: ~/code/my-app   branch: main</text>
+  <text class="l l5 dim"    x="20" y="184">   seeded with the origin's last 5 turns (pi -c resumes them)</text>
+  <text class="l l6 yellow" x="20" y="209">   ⚠  create a feature branch before committing</text>
+  <text class="l l7 dim"    x="20" y="234">   when done, from the origin run: kage finish fix-login</text>
+
+  <text class="l l9 comment" x="20" y="284"># … in the clone's pi: branch · edit · commit · push · open PR · quit …</text>
+
+  <text class="l l11" x="20" y="334"><tspan class="green">~/code/my-app</tspan> <tspan class="dim">$</tspan> kage finish fix-login</text>
+  <text class="l l12 purple" x="20" y="359">💨 Clone dispelled: merged 1 session(s) back, removed ../my-app--fix-login</text>
+</svg>

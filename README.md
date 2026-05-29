@@ -6,6 +6,8 @@
 
 > **影分身の術** — cast the **Shadow Clone Jutsu** on your git repo.
 
+<p align="center"><img src="./assets/demo.svg" alt="kage demo" width="100%"></p>
+
 `kage` copies your repo into an isolated sibling folder, drops you straight into
 [pi](https://github.com/earendil-works) to work in parallel, and when you're done merges the
 session memory back into the original and dispels the clone.
