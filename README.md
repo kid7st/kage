@@ -1,10 +1,11 @@
 # kage 🥷（影分身の術）
 
-A tiny CLI that casts **Kage Bunshin no Jutsu (影分身の術)** on your git repo — copying it into an isolated sibling folder,
-dropping you straight into [pi](https://github.com/earendil-works) to work in parallel, then merging the session
-memory back when you're done.
+A tiny CLI that casts the **Shadow Clone Jutsu (Kage Bunshin no Jutsu, 影分身の術)** on your git repo — copying it
+into an isolated sibling folder, dropping you straight into [pi](https://github.com/earendil-works) to work in
+parallel, then merging the session memory back when you're done.
 
-> 影分身术：造一个独立实体副本，带着本体的记忆出去独立行动；消散时记忆回流本体。
+> Shadow Clone Jutsu: spawn an independent physical copy that carries the original's memory and acts on its own;
+> when it dispels, its memory flows back to the original.
 
 ## Why
 
