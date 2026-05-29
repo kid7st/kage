@@ -1,7 +1,8 @@
 # kage 🥷（影分身）
 
-A tiny CLI that **shadow-clones** your git repo into an isolated sibling folder, drops you straight into
-[pi](https://github.com/earendil-works) to work in parallel, then merges the session memory back when you're done.
+A tiny CLI that casts **Kage Bunshin (影分身)** on your git repo — copying it into an isolated sibling folder,
+dropping you straight into [pi](https://github.com/earendil-works) to work in parallel, then merging the session
+memory back when you're done.
 
 > 影分身术：造一个独立实体副本，带着本体的记忆出去独立行动；消散时记忆回流本体。
 
