@@ -1,10 +1,14 @@
 {
   "name": "kage",
   "version": "0.1.0",
-  "description": "pi extension: spin off a memory-carrying shadow clone of your session to work in parallel, then merge it back",
-  "keywords": ["pi", "pi-extension", "coding-agent", "git", "worktree", "parallel"],
+  "description": "Shadow-clone a git repo into an isolated folder, drop into pi to work in parallel, then merge the session memory back",
+  "keywords": ["pi", "coding-agent", "git", "parallel", "worktree", "cli"],
   "license": "MIT",
-  "pi": {
-    "extensions": ["./index.ts"]
+  "type": "module",
+  "bin": {
+    "kage": "./bin/kage.mjs"
+  },
+  "engines": {
+    "node": ">=18"
   }
 }
