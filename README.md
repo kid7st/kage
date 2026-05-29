@@ -26,7 +26,7 @@ Requires `git`, `pi`, and Node ≥ 18 on your PATH.
 
 ```bash
 cd ~/code/my-app
-kage                       # shadow-clone . → ../my-app--kage-<ts>, seed recent context, open pi -c
+kage                       # kage bunshin . → ../my-app--kage-<ts>, seed recent context, open pi -c
 kage --name fix-login      # name the clone folder: ../my-app--fix-login
 kage /path/to/other-repo   # clone a different repo (path defaults to cwd)
 ```
