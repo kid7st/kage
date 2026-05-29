@@ -101,9 +101,19 @@ kage rm old-experiment     # discard a clone without merging (refuses if it has 
 kage pull .env config/local.json
 ```
 
-With no arguments inside a repo that already has clones, `kage` shows an interactive picker:
-create a new clone, or jump straight back into an existing one (`pi -c`). `finish` and `rm` show
-the same picker when you have multiple clones and don't name one.
+With no arguments inside a repo that already has clones, `kage` shows an interactive picker: create a
+new clone, or select an existing one to **enter** (`pi -c`), **finish**, or **remove**. `finish` and `rm`
+show the same picker when you have multiple clones and don't name one.
+
+### Shell integration (optional)
+
+```bash
+eval "$(kage shell-init)"   # add to ~/.zshrc or ~/.bashrc
+```
+
+This wraps `kage` so that `finish`/`rm` run from inside a clone **cd you back to the origin**
+automatically (a CLI can't change its parent shell's directory otherwise), and adds tab completion
+for subcommands and clone names.
 
 ### Commands
 
@@ -114,6 +124,7 @@ the same picker when you have multiple clones and don't name one.
 | `kage finish [name] [--force] [--push] [--pr]` | origin (or inside the clone) | Refuse if the clone has uncommitted or unpushed work (`--force` overrides), merge its session memory back (deduped), then delete the clone. `--push` pushes the branch first; `--pr` pushes and opens a PR via `gh`. Auto-selects / prompts when there are several. |
 | `kage rm [name] [--force]` | origin (or inside the clone) | Discard a clone **without** merging memory. Refuses if it has local-only work unless `--force`. For abandoned experiments. |
 | `kage pull <path...>` | inside a clone | Copy specific files/dirs (even gitignored ones) back to the origin at the same relative path. |
+| `kage shell-init` | shell rc | Print a shell wrapper (cd-back after `finish`/`rm`) + tab completion. Use `eval "$(kage shell-init)"`. |
 | `kage --help` / `--version` | anywhere | Usage / version. |
 
 ## How it works
@@ -133,8 +144,9 @@ Four invariants keep parallel work safe and lossless:
 ## Notes & caveats
 
 - The copy is a snapshot of the origin's **current** state, **including uncommitted changes**.
-- kage **doesn't create a branch** — the clone stays on the origin's current branch, so create a
-  feature branch before committing (kage prints a reminder).
+- kage **doesn't create a branch** — the clone stays on the origin's current branch. To keep the agent
+  from committing to it, kage injects a short in-context reminder into the clone's session, so the
+  agent itself is told to branch first (this reminder is deduped out when memory merges back).
 - Context seeding reads the origin's **most recent** session file. Pass `--blank` if that isn't the
   one you want carried over.
 - **Submodules**: a submodule's `.git` pointer is an absolute path and breaks on copy — run

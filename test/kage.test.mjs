@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -95,6 +95,38 @@ test("new --blank creates a clone, list shows it, finish removes it", () => {
 		const finish = run(["finish", "t1", "--force"], { cwd: repo, env });
 		assert.equal(finish.status, 0);
 		assert.ok(!existsSync(clone), "clone dir should be removed");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("shell-init prints a cd wrapper and completion", () => {
+	const r = run(["shell-init"]);
+	assert.equal(r.status, 0);
+	assert.match(r.stdout, /KAGE_CD_FILE/);
+	assert.match(r.stdout, /compdef _kage kage|complete -F _kage kage/);
+});
+
+test("a blank clone gets an in-context kage reminder", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const sessions = join(root, "sessions");
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: sessions };
+	const clone = join(root, "repo--h1");
+	try {
+		run(["--blank", "--name", "h1"], { cwd: repo, env });
+		const encName = readdirSync(sessions).find((d) => d.endsWith("repo--h1--"));
+		assert.ok(encName, "clone session dir should exist");
+		const dir = join(sessions, encName);
+		const file = join(dir, readdirSync(dir)[0]);
+		const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+		const last = lines[lines.length - 1];
+		assert.equal(last.type, "custom_message");
+		assert.equal(last.customType, "kage");
+		assert.match(last.content, /shadow clone/);
+		assert.match(last.content, /feature branch/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
