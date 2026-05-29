@@ -1,6 +1,6 @@
-# kage 🥷（影分身）
+# kage 🥷（影分身の術）
 
-A tiny CLI that casts **Kage Bunshin (影分身)** on your git repo — copying it into an isolated sibling folder,
+A tiny CLI that casts **Kage Bunshin no Jutsu (影分身の術)** on your git repo — copying it into an isolated sibling folder,
 dropping you straight into [pi](https://github.com/earendil-works) to work in parallel, then merging the session
 memory back when you're done.
 
