@@ -1,19 +1,23 @@
 #!/usr/bin/env node
 /**
- * kage 🥷 — 给当前 repo 造一个带记忆的影分身（独立文件夹副本），直接进 pi 并行干活，
- *           干完用 `kage finish` 把记忆回流本体、删掉副本。
+ * kage 🥷 — cast the Shadow Clone Jutsu on a git repo.
  *
- * 不变量（设计自洽的根基）：
- *   1. 隔离：分身 = 整目录独立副本（独立 .git）。
- *   2. 代码单向经 git/PR 回本体，文件系统从不反向覆盖本体工作树。
- *   3. 记忆双向经 ~/.pi：创建时 seed 本体最近若干回合；finish 时分身记忆回流（去重）。
- *   4. 本体只读：kage 对本体只复制 + 往 ~/.pi 写记忆，绝不动本体工作树。
+ * Copy the current repo into an isolated sibling folder (its own working tree and .git),
+ * drop straight into `pi` to work in parallel, then `kage finish` merges the session memory
+ * back into the original and deletes the clone.
  *
- * 命令：
- *   kage [path] [--name x] [--blank] [--recent N]   影分身 + 进 pi（path 默认 cwd）
- *   kage finish [name] [--force]                     收尾：检查 → 记忆回流 → 删分身
- *   kage list                                        列出当前 repo 的分身
- *   kage pull <path...>                              在分身里把指定文件拷回本体
+ * Design invariants:
+ *   1. Isolation   — a clone is a full independent copy (its own .git).
+ *   2. Code flows back only via git/PR — kage never copies the working tree back onto the origin.
+ *   3. Memory flows via ~/.pi — recent context is seeded in on create and merged back on finish
+ *      (deduped). These are session .jsonl files, not the working tree, so there's no collision.
+ *   4. The origin is read-only to kage — it only copies out and writes session memory.
+ *
+ * Commands:
+ *   kage [path] [--name x] [--blank] [--recent N]   clone repo + launch pi (path defaults to cwd)
+ *   kage finish [name] [--force]                     check -> merge memory back -> delete clone
+ *   kage list                                        list clones of the current repo
+ *   kage pull <path...>                              (inside a clone) copy files back to the origin
  */
 
 import { spawnSync } from "node:child_process";
@@ -25,7 +29,7 @@ import { basename, dirname, join, resolve, sep } from "node:path";
 const MARKER = ".kage.json";
 const SESSIONS = process.env.KAGE_SESSIONS_DIR || join(homedir(), ".pi", "agent", "sessions");
 
-// ── 小工具 ────────────────────────────────────────────────────────────────
+// ── helpers ────────────────────────────────────────────────────────────────
 function sh(cmd, args, opts = {}) {
 	const r = spawnSync(cmd, args, { encoding: "utf8", ...opts });
 	return { ok: r.status === 0, out: (r.stdout || "").trim(), err: (r.stderr || "").trim(), code: r.status };
@@ -37,7 +41,7 @@ const die = (msg) => {
 };
 const info = (msg) => console.error(msg);
 
-/** 绝对路径 → pi 的 session 目录名：/a/b -> --a-b-- */
+/** Absolute path -> pi's session dir name: /a/b -> --a-b-- */
 const encodeCwd = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
 const sessionDirFor = (repoAbs) => join(SESSIONS, encodeCwd(repoAbs));
 
@@ -56,7 +60,15 @@ function readMarker(dir) {
 	}
 }
 
-/** 复制整目录：mac 用 clonefile，linux 用 reflink，都不行就普通复制 */
+function mtime(p) {
+	try {
+		return statSync(p).mtimeMs;
+	} catch {
+		return 0;
+	}
+}
+
+/** Copy a whole directory: clonefile on macOS, reflink on Linux, plain copy as fallback. */
 function copyTree(src, dst) {
 	const isMac = process.platform === "darwin";
 	let r = sh("cp", isMac ? ["-c", "-R", src, dst] : ["--reflink=auto", "-R", src, dst]);
@@ -85,8 +97,8 @@ function parseArgs(argv) {
 	return { positional, flags };
 }
 
-// ── seed：把本体最近 N 回合写进分身 session 目录 ────────────────────────────
-/** 返回 { seedFile, seedLeafId } 或 undefined（无法 seed） */
+// ── seed: write the origin's last N turns into the clone's session dir ───────
+/** Returns { seedFile, seedLeafId } or undefined when seeding isn't possible. */
 function seedSession(originRepo, cloneDir, recentTurns) {
 	const srcDir = sessionDirFor(originRepo);
 	if (!existsSync(srcDir)) return undefined;
@@ -102,7 +114,7 @@ function seedSession(originRepo, cloneDir, recentTurns) {
 	const entries = lines.slice(1).map((l) => JSON.parse(l));
 	const byId = new Map(entries.map((e) => [e.id, e]));
 
-	// 从最后一条 entry 顺 parentId 走到根，得到时间正序的当前分支
+	// Walk from the last entry up via parentId to get the current branch in chronological order.
 	let cur = entries[entries.length - 1];
 	const branch = [];
 	while (cur) {
@@ -135,16 +147,8 @@ function seedSession(originRepo, cloneDir, recentTurns) {
 	return { seedFile: fname, seedLeafId: prev };
 }
 
-function mtime(p) {
-	try {
-		return statSync(p).mtimeMs;
-	} catch {
-		return 0;
-	}
-}
-
-// ── 记忆回流（去重）────────────────────────────────────────────────────────
-/** 把分身 session 目录回流本体；seed 那段按 seedLeafId 裁掉。返回写入文件数。 */
+// ── merge session memory back (deduped) ─────────────────────────────────────
+/** Copy the clone's session dir back to the origin; strip the seeded prefix via seedLeafId. */
 function mergeBack(cloneDir, originRepo, marker) {
 	const srcDir = sessionDirFor(cloneDir);
 	if (!existsSync(srcDir)) return 0;
@@ -166,7 +170,7 @@ function mergeBack(cloneDir, originRepo, marker) {
 		header.cwd = originRepo;
 		let body = lines.slice(1);
 
-		// 去重：若这是 seed 的那条 session，裁掉 seedLeafId 及之前的部分
+		// Dedupe: if this is the seeded session, drop everything up to and including seedLeafId.
 		if (marker?.seedFile === f && marker?.seedLeafId) {
 			const idx = body.findIndex((l) => {
 				try {
@@ -177,17 +181,17 @@ function mergeBack(cloneDir, originRepo, marker) {
 			});
 			if (idx >= 0) {
 				body = body.slice(idx + 1);
-				if (body.length === 0) continue; // 分身没在这条 session 上新增内容
+				if (body.length === 0) continue; // clone added nothing on top of the seed
 				const first = JSON.parse(body[0]);
-				first.parentId = null; // 重新挂根
+				first.parentId = null; // re-root
 				body[0] = JSON.stringify(first);
 			}
-			// 找不到 seedLeafId → 整条回拷（兜底，宁可重叠不损坏）
+			// seedLeafId not found -> copy the whole thing (safe fallback, may overlap)
 		}
 		writeFileSync(dest, [JSON.stringify(header), ...body].join("\n") + "\n");
 		n++;
 	}
-	// 清理分身在 ~/.pi 的孤儿 session 目录（pi 已退出，安全删）
+	// Remove the clone's now-orphaned session dir under ~/.pi (pi has exited, safe to delete).
 	try {
 		rmSync(srcDir, { recursive: true, force: true });
 	} catch {
@@ -196,7 +200,7 @@ function mergeBack(cloneDir, originRepo, marker) {
 	return n;
 }
 
-// ── 子命令 ──────────────────────────────────────────────────────────────────
+// ── subcommands ─────────────────────────────────────────────────────────────
 function cmdNew(argv) {
 	const { positional, flags } = parseArgs(argv);
 	const targetPath = positional[0] ? resolve(positional[0]) : process.cwd();
@@ -204,18 +208,19 @@ function cmdNew(argv) {
 	const recent = Math.max(1, parseInt(flags.recent, 10) || 5);
 
 	const repoRoot = repoTopLevel(targetPath);
-	if (!repoRoot) die(`不是 git 仓库：${targetPath}`);
-	if (existsSync(join(repoRoot, MARKER))) die("这里已经是一个影分身了，请回到本体 repo 再 kage");
+	if (!repoRoot) die(`not a git repository: ${targetPath}`);
+	if (existsSync(join(repoRoot, MARKER))) die("already inside a clone; run kage from the origin repo");
 
 	const name = (typeof flags.name === "string" && flags.name) || tsName();
 	const safe = name.replace(/\//g, "-");
 	const cloneDir = join(dirname(repoRoot), `${basename(repoRoot)}--${safe}`);
-	if (existsSync(cloneDir)) die(`目录已存在：${cloneDir}`);
+	if (existsSync(cloneDir)) die(`directory already exists: ${cloneDir}`);
 
 	const cp = copyTree(repoRoot, cloneDir);
-	if (!cp.ok) die(`复制失败：${cp.err}`);
+	if (!cp.ok) die(`copy failed: ${cp.err}`);
 
-	// 注意：默认不建分支——分身停在本体当前分支，分支由你/AI 自己来（像第二台机器）
+	// Note: kage does NOT create a branch. The clone stays on the origin's current branch,
+	// just like a fresh checkout on a second machine; you/the agent branch yourself.
 
 	const seed = blank ? undefined : seedSession(repoRoot, cloneDir, recent);
 	const marker = {
@@ -229,29 +234,29 @@ function cmdNew(argv) {
 
 	const curBranch = git(cloneDir, ["rev-parse", "--abbrev-ref", "HEAD"]).out || "?";
 	info("");
-	info(`🥷 影分身就位：${cloneDir}`);
-	info(`   本体：${repoRoot}　当前分支：${curBranch}`);
-	info(seed ? `   已带上本体最近 ${recent} 个回合的记忆（pi -c 接上）` : `   空白分身（不带记忆）`);
-	info(`   ⚠️  commit 前先建一个 feature 分支再 push / 开 PR（分身停在 ${curBranch} 上）`);
-	info(`   干完回到本体跑：kage finish ${safe}`);
+	info(`🥷 Shadow clone ready: ${cloneDir}`);
+	info(`   origin: ${repoRoot}   branch: ${curBranch}`);
+	info(seed ? `   seeded with the origin's last ${recent} turns (pi -c resumes them)` : `   blank clone (no context)`);
+	info(`   ⚠️  create a feature branch before committing (the clone is on ${curBranch})`);
+	info(`   when done, from the origin run: kage finish ${safe}`);
 	info("");
 
-	// 直接进 pi（seed 了就 -c 续上），pi 退出后回到原 shell
+	// Launch pi (resume the seeded session with -c). Returns to your shell when pi exits.
 	const piArgs = seed ? ["-c"] : [];
 	const r = spawnSync("pi", piArgs, { cwd: cloneDir, stdio: "inherit" });
 	if (r.error) {
-		if (r.error.code === "ENOENT") die("找不到 pi 命令（确认已安装并在 PATH 里）");
-		die(`启动 pi 失败：${r.error.message}`);
+		if (r.error.code === "ENOENT") die("pi not found (make sure it is installed and on your PATH)");
+		die(`failed to launch pi: ${r.error.message}`);
 	}
 	info("");
-	info(`↩︎  已退出分身的 pi。收尾：kage finish ${safe}`);
+	info(`↩︎  left the clone's pi. To finish: kage finish ${safe}`);
 }
 
 function cmdFinish(argv) {
 	const { positional, flags } = parseArgs(argv);
 	const force = !!flags.force;
 
-	// 定位分身：在分身里跑 / 在本体里跑（按 name 或唯一性）
+	// Locate the clone: either we're inside it, or we're in the origin (by name or uniqueness).
 	const here = repoTopLevel(process.cwd());
 	let cloneDir, originRepo, marker;
 	const hereMarker = here && readMarker(here);
@@ -260,17 +265,17 @@ function cmdFinish(argv) {
 		marker = hereMarker;
 		originRepo = marker.originRepo;
 	} else {
-		if (!here) die("不是 git 仓库");
+		if (!here) die("not a git repository");
 		originRepo = here;
 		const clones = listClones(originRepo);
-		if (clones.length === 0) die("没有找到这个 repo 的影分身");
+		if (clones.length === 0) die("no shadow clones found for this repo");
 		const pick = positional[0]
 			? clones.find((c) => c.name === positional[0] || basename(c.dir) === positional[0])
 			: clones.length === 1
 				? clones[0]
 				: undefined;
 		if (!pick) {
-			info("有多个分身，请指定名字：");
+			info("multiple clones — specify a name:");
 			clones.forEach((c) => info(`  ${c.name}`));
 			process.exit(1);
 		}
@@ -278,20 +283,20 @@ function cmdFinish(argv) {
 		marker = pick.marker;
 	}
 
-	// 安全检查（失败要可见，别默默删代码）
+	// Safety checks (fail visibly; don't silently delete work).
 	if (!force) {
 		const status = git(cloneDir, ["status", "--porcelain"]);
 		const dirty = status.out.split("\n").filter((l) => l.trim() && l.slice(3).trim() !== MARKER);
-		if (dirty.length > 0) die("分身有未提交改动，先 commit 或加 --force");
+		if (dirty.length > 0) die("clone has uncommitted changes; commit them or pass --force");
 		const up = git(cloneDir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
-		if (!up.ok) die("分身当前分支没 push 到远端（无 upstream），先 push 或加 --force");
+		if (!up.ok) die("clone's branch has no upstream (not pushed); push it or pass --force");
 		const ahead = git(cloneDir, ["rev-list", "@{u}..HEAD", "--count"]);
-		if (ahead.ok && ahead.out !== "0") die(`分身有 ${ahead.out} 个提交未 push，先 push 或加 --force`);
+		if (ahead.ok && ahead.out !== "0") die(`clone has ${ahead.out} unpushed commit(s); push them or pass --force`);
 	}
 
 	const n = mergeBack(cloneDir, originRepo, marker);
 
-	// 删分身目录（先把自己挪出去，避免删 cwd）
+	// Delete the clone (move out of it first so we don't delete our own cwd).
 	try {
 		process.chdir(originRepo);
 	} catch {
@@ -299,8 +304,8 @@ function cmdFinish(argv) {
 	}
 	rmSync(cloneDir, { recursive: true, force: true });
 
-	info(`💨 分身消散：回流 ${n} 个 session 到本体，已删除 ${cloneDir}`);
-	if (hereMarker) info(`   你的 shell 还在已删目录里，请 cd 回：${originRepo}`);
+	info(`💨 Clone dispelled: merged ${n} session(s) back, removed ${cloneDir}`);
+	if (hereMarker) info(`   your shell is still in the deleted dir; cd back to: ${originRepo}`);
 }
 
 function listClones(originRepo) {
@@ -316,13 +321,13 @@ function listClones(originRepo) {
 
 function cmdList() {
 	const repoRoot = repoTopLevel(process.cwd());
-	if (!repoRoot) die("不是 git 仓库");
+	if (!repoRoot) die("not a git repository");
 	const clones = listClones(repoRoot);
 	if (clones.length === 0) {
-		info("没有影分身。");
+		info("No shadow clones.");
 		return;
 	}
-	info("当前影分身：");
+	info("Shadow clones:");
 	for (const c of clones) {
 		const br = git(c.dir, ["rev-parse", "--abbrev-ref", "HEAD"]).out || "?";
 		info(`  ${c.name}  [${br}]  ${c.dir}`);
@@ -333,8 +338,8 @@ function cmdPull(argv) {
 	const { positional } = parseArgs(argv);
 	const cloneDir = repoTopLevel(process.cwd());
 	const marker = cloneDir && readMarker(cloneDir);
-	if (!marker) die("pull 只能在影分身里跑（本体直接改就行）");
-	if (positional.length === 0) die("用法：kage pull <相对路径> [更多路径...]");
+	if (!marker) die("kage pull only runs inside a clone (edit the origin directly otherwise)");
+	if (positional.length === 0) die("usage: kage pull <relative-path> [more paths...]");
 	const originRepo = marker.originRepo;
 	const cloneRoot = cloneDir.endsWith(sep) ? cloneDir : cloneDir + sep;
 	const originRoot = originRepo.endsWith(sep) ? originRepo : originRepo + sep;
@@ -343,26 +348,43 @@ function cmdPull(argv) {
 		const src = resolve(cloneDir, rel);
 		const dst = resolve(originRepo, rel);
 		if (!src.startsWith(cloneRoot) || !dst.startsWith(originRoot)) {
-			info(`✗ 路径越界，跳过：${rel}`);
+			info(`✗ path escapes the repo, skipped: ${rel}`);
 			continue;
 		}
 		if (!existsSync(src)) {
-			info(`✗ 分身里不存在，跳过：${rel}`);
+			info(`✗ not found in clone, skipped: ${rel}`);
 			continue;
 		}
 		if (existsSync(dst)) rmSync(dst, { recursive: true, force: true });
 		mkdirSync(dirname(dst), { recursive: true });
 		const cp = copyTree(src, dst);
 		if (!cp.ok) {
-			info(`✗ 拷贝失败 ${rel}：${cp.err}`);
+			info(`✗ copy failed ${rel}: ${cp.err}`);
 			continue;
 		}
 		done++;
 	}
-	info(`📤 已把 ${done}/${positional.length} 个路径从分身拷回本体（${originRepo}）`);
+	info(`📤 Pulled ${done}/${positional.length} path(s) from the clone back to the origin (${originRepo})`);
 }
 
-// ── 入口 ──────────────────────────────────────────────────────────────────
+const HELP = `kage 🥷 — Shadow Clone Jutsu for your git repo
+
+Usage:
+  kage [path] [--name <x>] [--blank] [--recent <N>]   clone repo + launch pi (path defaults to cwd)
+  kage finish [name] [--force]                         check -> merge memory back -> delete clone
+  kage list                                            list clones of the current repo
+  kage pull <path...>                                  (inside a clone) copy files back to the origin
+
+Options:
+  --name <x>    name the clone folder/<repo>--<x> (default: kage-<timestamp>)
+  --blank       don't seed the clone with the origin's recent context
+  --recent <N>  number of recent turns to seed (default: 5)
+  --force       skip the uncommitted/unpushed safety check in finish
+
+Env:
+  KAGE_SESSIONS_DIR   pi session storage (default: ~/.pi/agent/sessions)`;
+
+// ── entry ───────────────────────────────────────────────────────────────────
 function main() {
 	const [sub, ...rest] = process.argv.slice(2);
 	switch (sub) {
@@ -377,19 +399,14 @@ function main() {
 			return cmdPull(rest);
 		case "-h":
 		case "--help":
-			info(
-				[
-					"kage 🥷 — 影分身并行开发",
-					"",
-					"  kage [path] [--name x] [--blank] [--recent N]   影分身 + 进 pi（path 默认 cwd）",
-					"  kage finish [name] [--force]                     收尾：检查 → 记忆回流 → 删分身",
-					"  kage list                                        列出当前 repo 的分身",
-					"  kage pull <path...>                              在分身里把指定文件拷回本体",
-				].join("\n"),
-			);
-			return;
+			return info(HELP);
+		case "-v":
+		case "--version": {
+			const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+			return info(pkg.version);
+		}
 		default:
-			// 没匹配子命令 → 当作 `kage <path>`（path 语义）
+			// Unknown subcommand -> treat as `kage <path>`.
 			return cmdNew(process.argv.slice(2));
 	}
 }

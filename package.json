@@ -1,14 +1,43 @@
 {
-  "name": "kage",
+  "name": "@kid7st/kage",
   "version": "0.1.0",
-  "description": "Shadow-clone a git repo into an isolated folder, drop into pi to work in parallel, then merge the session memory back",
-  "keywords": ["pi", "coding-agent", "git", "parallel", "worktree", "cli"],
+  "description": "🥷 Shadow Clone Jutsu for your git repo: copy it into an isolated folder, work in parallel with pi, then merge the session memory back",
+  "keywords": [
+    "pi",
+    "coding-agent",
+    "ai",
+    "cli",
+    "git",
+    "parallel",
+    "worktree",
+    "developer-tools"
+  ],
+  "homepage": "https://github.com/kid7st/kage#readme",
+  "bugs": {
+    "url": "https://github.com/kid7st/kage/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kid7st/kage.git"
+  },
   "license": "MIT",
+  "author": "kid7st (https://github.com/kid7st)",
   "type": "module",
   "bin": {
-    "kage": "./bin/kage.mjs"
+    "kage": "bin/kage.mjs"
   },
+  "files": [
+    "bin/"
+  ],
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "scripts": {
+    "test": "node --test",
+    "lint": "node --check bin/kage.mjs"
   }
 }

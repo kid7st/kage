@@ -1,5 +1,9 @@
 # kage 🥷（影分身の術）
 
+[![CI](https://github.com/kid7st/kage/actions/workflows/ci.yml/badge.svg)](https://github.com/kid7st/kage/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/@kid7st/kage)](https://www.npmjs.com/package/@kid7st/kage)
+[![license](https://img.shields.io/npm/l/@kid7st/kage)](./LICENSE)
+
 A tiny CLI that casts the **Shadow Clone Jutsu (Kage Bunshin no Jutsu, 影分身の術)** on your git repo — copying it
 into an isolated sibling folder, dropping you straight into [pi](https://github.com/earendil-works) to work in
 parallel, then merging the session memory back when you're done.
@@ -18,11 +22,19 @@ build caches intact, so the clone can build & test immediately.
 ## Install
 
 ```bash
-git clone <this-repo> ~/coding/kage
-npm link            # or: ln -s ~/coding/kage/bin/kage.mjs /usr/local/bin/kage
+npm install -g @kid7st/kage     # then use `kage` anywhere
+# or run without installing:
+npx @kid7st/kage
 ```
 
-Requires `git`, `pi`, and Node ≥ 18 on your PATH.
+From source:
+
+```bash
+git clone https://github.com/kid7st/kage ~/coding/kage
+cd ~/coding/kage && npm link
+```
+
+Requires `git`, [`pi`](https://github.com/earendil-works), and Node ≥ 18 on your PATH.
 
 ## Usage
 
