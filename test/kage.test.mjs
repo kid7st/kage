@@ -87,12 +87,37 @@ test("new --blank creates a clone, list shows it, finish removes it", () => {
 		assert.ok(existsSync(join(clone, "a.txt")), "files should be copied");
 
 		const list = run(["list"], { cwd: repo, env });
+		assert.match(list.stderr, /Shadow clones of repo/);
 		assert.match(list.stderr, /t1/);
+		assert.match(list.stderr, /not pushed/); // status dashboard column
 
 		// nothing committed/pushed in the clone -> needs --force
 		const finish = run(["finish", "t1", "--force"], { cwd: repo, env });
 		assert.equal(finish.status, 0);
 		assert.ok(!existsSync(clone), "clone dir should be removed");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("rm discards a clone (with --force)", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--gone");
+	try {
+		run(["--blank", "--name", "gone"], { cwd: repo, env });
+		assert.ok(existsSync(clone));
+		// without --force and non-interactive: refuses (local-only work / can't confirm)
+		const refused = run(["rm", "gone"], { cwd: repo, env });
+		assert.notEqual(refused.status, 0);
+		assert.ok(existsSync(clone), "clone should still exist after refused rm");
+		// with --force: gone
+		const r = run(["rm", "gone", "--force"], { cwd: repo, env });
+		assert.equal(r.status, 0);
+		assert.ok(!existsSync(clone), "clone should be removed");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
