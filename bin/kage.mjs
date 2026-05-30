@@ -30,7 +30,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import readline from "node:readline";
 
-const VERSION = "0.3.2"; // keep in sync with package.json (enforced by test)
+const VERSION = "0.3.3"; // keep in sync with package.json (enforced by test)
 const MARKER = ".kage.json";
 const SESSIONS = process.env.KAGE_SESSIONS_DIR || join(homedir(), ".pi", "agent", "sessions");
 const RECENT_SESSIONS = 5; // how many of the origin's most-recent sessions to copy into a clone
