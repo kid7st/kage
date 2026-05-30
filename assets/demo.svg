@@ -1,51 +1,54 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 400" width="860" height="400" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace" font-size="14">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 410" width="860" height="410" font-family="ui-monospace,'SF Mono',Menlo,Consolas,monospace" font-size="14">
   <style>
     .win { fill:#0d1117; stroke:#30363d; stroke-width:1; }
     text { fill:#e6edf3; white-space:pre; }
-    .dim   { fill:#8b949e; }
-    .green { fill:#56d364; }
-    .blue  { fill:#58a6ff; }
-    .yellow{ fill:#e3b341; }
+    .dim    { fill:#8b949e; }
+    .green  { fill:#56d364; }
+    .blue   { fill:#58a6ff; }
+    .cyan   { fill:#39c5cf; }
     .comment{ fill:#6e7681; font-style:italic; }
-    .purple{ fill:#bc8cff; }
+    .purple { fill:#bc8cff; }
     .l { opacity:0; }
-    .l1 { animation: a1 14s infinite; }
-    .l3 { animation: a3 14s infinite; }
-    .l4 { animation: a4 14s infinite; }
-    .l5 { animation: a5 14s infinite; }
-    .l6 { animation: a6 14s infinite; }
-    .l7 { animation: a7 14s infinite; }
-    .l9 { animation: a9 14s infinite; }
-    .l11{ animation: a11 14s infinite; }
-    .l12{ animation: a12 14s infinite; }
+    .l1 { animation: a1  16s infinite; }
+    .l2 { animation: a2  16s infinite; }
+    .l3 { animation: a3  16s infinite; }
+    .l4 { animation: a4  16s infinite; }
+    .l5 { animation: a5  16s infinite; }
+    .l6 { animation: a6  16s infinite; }
+    .l7 { animation: a7  16s infinite; }
+    .l8 { animation: a8  16s infinite; }
+    .l9 { animation: a9  16s infinite; }
+    .l10{ animation: a10 16s infinite; }
     @keyframes a1  {0%,3%{opacity:0}  5%{opacity:1}  96%{opacity:1} 100%{opacity:0}}
-    @keyframes a3  {0%,9%{opacity:0}  11%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a4  {0%,12%{opacity:0} 14%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a5  {0%,15%{opacity:0} 17%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a6  {0%,18%{opacity:0} 20%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a7  {0%,21%{opacity:0} 23%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a9  {0%,30%{opacity:0} 32%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a11 {0%,43%{opacity:0} 45%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
-    @keyframes a12 {0%,49%{opacity:0} 51%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a2  {0%,11%{opacity:0} 13%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a3  {0%,14%{opacity:0} 16%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a4  {0%,17%{opacity:0} 19%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a5  {0%,20%{opacity:0} 22%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a6  {0%,33%{opacity:0} 35%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a7  {0%,47%{opacity:0} 49%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a8  {0%,53%{opacity:0} 55%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a9  {0%,57%{opacity:0} 59%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
+    @keyframes a10 {0%,61%{opacity:0} 63%{opacity:1} 96%{opacity:1} 100%{opacity:0}}
   </style>
 
-  <rect class="win" x="1" y="1" width="858" height="398" rx="10"/>
+  <rect class="win" x="1" y="1" width="858" height="408" rx="10"/>
   <circle cx="24" cy="24" r="6" fill="#ff5f56"/>
   <circle cx="44" cy="24" r="6" fill="#ffbd2e"/>
   <circle cx="64" cy="24" r="6" fill="#27c93f"/>
   <text x="430" y="29" text-anchor="middle" class="dim">kage 🥷 — Shadow Clone Jutsu</text>
   <line x1="1" y1="46" x2="859" y2="46" stroke="#30363d" stroke-width="1"/>
 
-  <text class="l l1"  x="20" y="84"><tspan class="green">~/code/my-app</tspan> <tspan class="dim">$</tspan> kage --name fix-login</text>
+  <text class="l l1"  x="20" y="80"><tspan class="green">~/code/my-app</tspan> <tspan class="dim">$</tspan> kage --name fix-login</text>
 
-  <text class="l l3 blue"   x="20" y="134">🥷 Shadow clone ready: ../my-app--fix-login</text>
-  <text class="l l4 dim"    x="20" y="159">   origin: ~/code/my-app   branch: main</text>
-  <text class="l l5 dim"    x="20" y="184">   seeded with the origin's last 5 turns (pi -c resumes them)</text>
-  <text class="l l6 yellow" x="20" y="209">   ⚠  create a feature branch before committing</text>
-  <text class="l l7 dim"    x="20" y="234">   when done, from the origin run: kage finish fix-login</text>
+  <text class="l l2 blue" x="20" y="120">🥷 Shadow clone ready: ../my-app--fix-login</text>
+  <text class="l l3 dim"  x="20" y="145">   origin: ~/code/my-app   branch: main</text>
+  <text class="l l4 dim"  x="20" y="170">   origin's 5 session(s) are available via resume (pi: pick from the list)</text>
+  <text class="l l5 dim"  x="20" y="195">   when done: kage finish fix-login</text>
 
-  <text class="l l9 comment" x="20" y="284"># … in the clone's pi: branch · edit · commit · push · open PR · quit …</text>
+  <text class="l l6 comment" x="20" y="240"># … in the clone's fresh pi: switch -c · edit · commit · push · open PR · quit …</text>
 
-  <text class="l l11" x="20" y="334"><tspan class="green">~/code/my-app</tspan> <tspan class="dim">$</tspan> kage finish fix-login</text>
-  <text class="l l12 purple" x="20" y="359">💨 Clone dispelled: merged 1 session(s) back, removed ../my-app--fix-login</text>
+  <text class="l l7"        x="20" y="285"><tspan class="green">~/code/my-app</tspan> <tspan class="dim">$</tspan> kage finish fix-login --pr</text>
+  <text class="l l8 green"  x="20" y="310">⬆  pushed fix-login to origin</text>
+  <text class="l l9 cyan"   x="20" y="335">🔗 opened PR: https://github.com/me/my-app/pull/42</text>
+  <text class="l l10 purple" x="20" y="360">💨 Clone dispelled: merged 1 session(s) back, removed ../my-app--fix-login</text>
 </svg>

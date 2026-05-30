@@ -35,9 +35,9 @@ machine. Each parallel session gets its own working tree, its own branch, its ow
 Code merges the normal way: on GitHub. No local collisions, ever.
 
 And like a real Naruto shadow clone, it **carries your memory out** (the origin's 5 most recent pi
-sessions are copied into the clone, so you can `resume` them there) and **returns it on dispel** (the clone's
-*new* sessions are merged back into the original when you `finish`). The clone always opens a **fresh**
-session — kage never replays your old turns or fakes a "resumed" conversation.
+sessions are copied into the clone, so you can `resume` them there) and **returns it on dispel** (the
+clone's *new* sessions are merged back into the original when you `finish`). The clone always opens a
+**fresh** session — kage never replays your old turns or fakes a "resumed" conversation.
 
 Why a full folder copy instead of `git worktree`? A worktree shares one `.git`, which means you
 can't check out the same branch twice, you share stash/refs, and you get a *fresh* checkout with no
@@ -158,15 +158,11 @@ Four invariants keep parallel work safe and lossless:
 - kage **doesn't create a branch** — the clone stays on the origin's current branch, and kage stays out
   of git flow entirely. Decide your own branching/PR workflow inside the clone (instruct the agent via
   your `AGENTS.md` / project conventions).
-- The clone opens a **fresh** pi session. The origin's 5 most recent sessions are copied in and are **resumable** via
-  pi's resume picker. Real work belongs in the clone's own fresh session, but if you do resume a copied
-  origin session and add turns, on `finish` that continuation is written back as a **separate** session
-  (the origin's original session is left untouched), so nothing is lost and no active conversation is hijacked.
-- **Upgrading from an older kage:** clones created before the copy-in/fresh-session redesign carry a
-  fabricated *seed* session in their `.kage.json` (`seedFile`/`seedLeafId`). `finish` no longer special-
-  cases those, so finishing such a clone would copy the replayed seed context back into the origin. For
-  any clone created by an older kage, prefer `kage rm` (the code is already on its branch / PR) instead
-  of `kage finish`.
+- The clone opens a **fresh** pi session. The origin's 5 most recent sessions are copied in and are
+  **resumable** via pi's resume picker. Real work belongs in the clone's own fresh session, but if you do
+  resume a copied origin session and add turns, on `finish` that continuation is written back as a
+  **separate** session (the origin's original session is left untouched), so nothing is lost and no
+  active conversation is hijacked.
 - **No remote?** `finish` still works losslessly: committed work that isn't on a remote is fetched into
   the origin as a local `kage/<name>-<sha>` branch (the exact name is printed; `git merge` it to
   integrate). The short sha keeps the ref unique, so reusing a clone name never collides. With a remote
