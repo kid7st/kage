@@ -132,6 +132,21 @@ function tsName() {
 	return `kage-${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+/**
+ * Sanitize a clone name into a slug that's safe as both a folder suffix and a git branch/ref:
+ * ref-illegal chars (spaces, /, ~^:?*[\\, etc.) -> '-', no '..', no leading/trailing '-'/'.',
+ * no trailing '.lock'. Falls back to a timestamp name if it sanitizes to empty.
+ */
+function slug(name) {
+	const s = name
+		.replace(/[^A-Za-z0-9._-]+/g, "-")
+		.replace(/\.{2,}/g, ".")
+		.replace(/-{2,}/g, "-")
+		.replace(/^[-.]+|[-.]+$/g, "")
+		.replace(/\.lock$/i, "-lock");
+	return s || tsName();
+}
+
 function parseArgs(argv) {
 	const positional = [];
 	const flags = {};
@@ -477,7 +492,7 @@ async function cmdNew(argv) {
 		const prompt = `Kage name: ${basename(repoRoot)}--`;
 		name = (process.stdin.isTTY ? await ask(prompt, def) : "") || def;
 	}
-	const safe = name.replace(/\//g, "-");
+	const safe = slug(name);
 	const cloneDir = join(dirname(repoRoot), `${basename(repoRoot)}--${safe}`);
 	if (existsSync(cloneDir)) die(`directory already exists: ${cloneDir}`);
 
@@ -560,7 +575,7 @@ async function cmdFinish(argv) {
 		const head = git(clone.dir, ["rev-parse", "HEAD"]).out;
 		// Always a unique ref (name + short sha) so reusing a clone name never collides with an
 		// earlier preserved branch — which would either abort the fetch (non-ff) or clobber it.
-		const target = `kage/${clone.name}-${head.slice(0, 7)}`;
+		const target = `kage/${slug(clone.name)}-${head.slice(0, 7)}`;
 		const r = git(originRepo, ["fetch", clone.dir, `${s.branch}:refs/heads/${target}`]);
 		if (!r.ok) die(`failed to preserve the clone's branch into the origin: ${r.err}`);
 		info(`🌿 preserved the clone's commits in the origin as ${paint.cyan(target)}  (merge with: git merge ${target})`);
@@ -748,6 +763,7 @@ With no args inside a repo that already has clones, kage opens an interactive me
 
 Options:
   --name <x>    name the clone folder /<repo>--<x> (default: kage-<timestamp>); skips the name prompt
+                (sanitized to a git-ref-safe slug, since the name is also used as a branch name)
   --pr          (finish) push the branch and open a GitHub PR via gh, then finish
   --push        (finish) push the branch before finishing (implied by --pr)
   --force       skip the safety checks: uncommitted/unpushed guard (finish) or local-only guard (rm)

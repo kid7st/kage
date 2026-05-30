@@ -252,6 +252,33 @@ test("finish with no remote preserves the clone's commits into the origin as kag
 	}
 });
 
+test("clone names are sanitized to a git-ref-safe slug (folder + no-remote preservation ref)", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo); // no remote
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--foo-bar"); // "foo bar" -> slug "foo-bar"
+	try {
+		const r = run(["--name", "foo bar"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.ok(existsSync(clone), "folder suffix should be the slug 'foo-bar'");
+
+		writeFileSync(join(clone, "b.txt"), "x\n");
+		spawnSync("git", ["add", "."], { cwd: clone });
+		spawnSync("git", ["commit", "-qm", "work"], { cwd: clone });
+		const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: clone, encoding: "utf8" }).stdout.trim();
+
+		const fin = run(["finish", "foo-bar", "--force"], { cwd: repo, env });
+		assert.equal(fin.status, 0, fin.stderr); // must not abort on an invalid ref
+		assert.ok(!existsSync(clone), "clone removed");
+		const ref = spawnSync("git", ["rev-parse", `kage/foo-bar-${head.slice(0, 7)}`], { cwd: repo, encoding: "utf8" });
+		assert.equal(ref.stdout.trim(), head, "preserved under a valid ref-safe branch name");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("rm discards a clone (with --force)", () => {
 	const root = tmp();
 	const repo = join(root, "repo");
