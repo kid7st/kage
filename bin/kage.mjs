@@ -358,16 +358,25 @@ function mergeBack(cloneDir, originRepo) {
 	return n;
 }
 
-/** Ask the shell wrapper (kage shell-init) to cd somewhere after we exit. */
-function requestCd(path) {
+/**
+ * We just deleted the clone we were running inside, so the parent shell is now in a
+ * deleted directory. A CLI can't cd its parent shell, so: if the shell wrapper is active
+ * (KAGE_CD_FILE set by `eval "$(kage shell-init)"`), hand it the origin path to cd into;
+ * otherwise print a copy-pasteable `cd` and how to enable the auto version.
+ */
+function leaveClone(originRepo) {
 	const f = process.env.KAGE_CD_FILE;
 	if (f) {
 		try {
-			writeFileSync(f, path);
+			writeFileSync(f, originRepo);
+			info(paint.dim(`   ↩  back to ${originRepo}`));
+			return;
 		} catch {
-			/* ignore */
+			/* fall through to the manual hint */
 		}
 	}
+	info(paint.yellow(`   ↩  your shell is still in the deleted clone — run:  ${paint.bold(`cd ${originRepo}`)}`));
+	info(paint.dim(`      enable auto cd-back: add  eval "$(kage shell-init)"  to your ~/.zshrc`));
 }
 
 function launchPi(cwd, args) {
@@ -525,10 +534,7 @@ async function cmdFinish(argv) {
 	rmSync(clone.dir, { recursive: true, force: true });
 
 	info(`💨 Clone dispelled: merged ${n} session(s) back, removed ${clone.dir}`);
-	if (insideClone) {
-		requestCd(originRepo);
-		info(paint.dim(`   cd back to: ${originRepo}  (auto with: eval "$(kage shell-init)")`));
-	}
+	if (insideClone) leaveClone(originRepo);
 }
 
 async function cmdRm(argv) {
@@ -559,10 +565,7 @@ async function cmdRm(argv) {
 	}
 	rmSync(clone.dir, { recursive: true, force: true });
 	info(`🗑  Removed clone ${clone.name} (${clone.dir})`);
-	if (insideClone) {
-		requestCd(originRepo);
-		info(paint.dim(`   cd back to: ${originRepo}  (auto with: eval "$(kage shell-init)")`));
-	}
+	if (insideClone) leaveClone(originRepo);
 }
 
 function cmdList(argv) {
