@@ -47,8 +47,8 @@ can't check out the same branch twice, you share stash/refs, and you get a *fres
 npm install -g pi-kage     # then use `kage` anywhere
 npx pi-kage                # or run without installing
 
-# pnpm (use @latest so a stale metadata cache doesn't pin you to an old version)
-pnpm add -g pi-kage@latest
+# pnpm
+pnpm add -g pi-kage
 pnpm dlx pi-kage           # or run without installing
 
 # or install script (no npm needed — kage is a single, zero-dependency Node script)
