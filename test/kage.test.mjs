@@ -72,7 +72,7 @@ test("list reports no clones in a fresh repo", () => {
 	}
 });
 
-test("new --blank creates a clone, list shows it, finish removes it", () => {
+test("new creates a clone, list shows it, finish removes it", () => {
 	const root = tmp();
 	const repo = join(root, "repo");
 	mkdirSync(repo);
@@ -80,7 +80,7 @@ test("new --blank creates a clone, list shows it, finish removes it", () => {
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
 	const clone = join(root, "repo--t1");
 	try {
-		const r = run(["--blank", "--name", "t1"], { cwd: repo, env });
+		const r = run(["--name", "t1"], { cwd: repo, env });
 		assert.equal(r.status, 0);
 		assert.ok(existsSync(clone), "clone dir should exist");
 		assert.ok(existsSync(join(clone, ".kage.json")), "marker should exist");
@@ -107,26 +107,37 @@ test("shell-init prints a cd wrapper and completion", () => {
 	assert.match(r.stdout, /compdef _kage kage|complete -F _kage kage/);
 });
 
-test("a blank clone gets an in-context kage reminder", () => {
+test("origin history is copied into the clone, and new clone work merges back without duplicating it", () => {
 	const root = tmp();
 	const repo = join(root, "repo");
 	mkdirSync(repo);
 	initRepo(repo);
 	const sessions = join(root, "sessions");
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: sessions };
+
+	// seed the origin's session dir with one history file (encoded by the real toplevel path)
+	const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+	const enc = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
+	const originDir = join(sessions, enc(top));
+	mkdirSync(originDir, { recursive: true });
+	const histName = "2026-01-01T00-00-00-000Z_aaaaaaaa-0000-0000-0000-000000000000.jsonl";
+	writeFileSync(join(originDir, histName), JSON.stringify({ type: "session", version: 3, id: "hist", cwd: top }) + "\n");
+
 	const clone = join(root, "repo--h1");
 	try {
-		run(["--blank", "--name", "h1"], { cwd: repo, env });
-		const encName = readdirSync(sessions).find((d) => d.endsWith("repo--h1--"));
-		assert.ok(encName, "clone session dir should exist");
-		const dir = join(sessions, encName);
-		const file = join(dir, readdirSync(dir)[0]);
-		const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-		const last = lines[lines.length - 1];
-		assert.equal(last.type, "custom_message");
-		assert.equal(last.customType, "kage");
-		assert.match(last.content, /shadow clone/);
-		assert.match(last.content, /feature branch/);
+		run(["--name", "h1"], { cwd: repo, env });
+		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--h1--")));
+		// the origin's history is copied into the clone (resumable there)
+		assert.ok(existsSync(join(cloneSessDir, histName)), "origin history should be copied into the clone");
+
+		// simulate new clone work: a brand-new session file the clone created
+		const newName = "2026-02-02T00-00-00-000Z_bbbbbbbb-0000-0000-0000-000000000000.jsonl";
+		writeFileSync(join(cloneSessDir, newName), JSON.stringify({ type: "session", version: 3, id: "new", cwd: clone }) + "\n");
+
+		run(["finish", "h1", "--force"], { cwd: repo, env });
+		const originFiles = readdirSync(originDir);
+		assert.ok(originFiles.includes(histName), "origin keeps its original history file");
+		assert.ok(originFiles.includes(newName), "clone's new session merges back into the origin");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -146,7 +157,7 @@ test("finish --push pushes the branch then finishes", () => {
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
 	const clone = join(root, "repo--p1");
 	try {
-		run(["--blank", "--name", "p1"], { cwd: repo, env });
+		run(["--name", "p1"], { cwd: repo, env });
 		// make a committed-but-unpushed change in the clone on a new branch
 		spawnSync("git", ["switch", "-qc", "feat"], { cwd: clone });
 		writeFileSync(join(clone, "b.txt"), "x\n");
@@ -172,7 +183,7 @@ test("rm discards a clone (with --force)", () => {
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
 	const clone = join(root, "repo--gone");
 	try {
-		run(["--blank", "--name", "gone"], { cwd: repo, env });
+		run(["--name", "gone"], { cwd: repo, env });
 		assert.ok(existsSync(clone));
 		// without --force and non-interactive: refuses (local-only work / can't confirm)
 		const refused = run(["rm", "gone"], { cwd: repo, env });

@@ -8,16 +8,16 @@
 
 <p align="center"><img src="./assets/demo.svg" alt="kage demo" width="100%"></p>
 
-`kage` copies your repo into an isolated sibling folder, drops you straight into
-[pi](https://github.com/earendil-works) to work in parallel, and when you're done merges the
-session memory back into the original and dispels the clone.
+`kage` copies your repo into an isolated sibling folder, drops you straight into a **fresh**
+[pi](https://github.com/earendil-works) session to work in parallel, and when you're done merges the
+clone's new sessions back into the original and dispels the clone.
 
 ```bash
 npm install -g pi-kage
 cd my-app
-kage                 # 🥷 clone → ../my-app--kage-<ts>, open pi with your recent context
+kage                 # 🥷 clone → ../my-app--kage-<ts>, open a fresh pi (origin history resumable)
 #   ...work in the clone: commit, push, open a PR, quit pi...
-kage finish          # 💨 merge the session memory back, delete the clone
+kage finish          # 💨 merge the clone's new sessions back, delete the clone
 ```
 
 ---
@@ -34,9 +34,10 @@ A shadow clone is a **full, independent copy** of the repo — like a second eng
 machine. Each parallel session gets its own working tree, its own branch, its own commits and PR.
 Code merges the normal way: on GitHub. No local collisions, ever.
 
-And like a real Naruto shadow clone, it **carries your memory out** (the clone's pi session is
-seeded with your recent conversation) and **returns it on dispel** (the clone's session is merged
-back into the original when you `finish`).
+And like a real Naruto shadow clone, it **carries your memory out** (the origin's 5 most recent pi
+sessions are copied into the clone, so you can `resume` them there) and **returns it on dispel** (the clone's
+*new* sessions are merged back into the original when you `finish`). The clone always opens a **fresh**
+session — kage never replays your old turns or fakes a "resumed" conversation.
 
 Why a full folder copy instead of `git worktree`? A worktree shares one `.git`, which means you
 can't check out the same branch twice, you share stash/refs, and you get a *fresh* checkout with no
@@ -65,14 +66,14 @@ Requires **git**, [**pi**](https://github.com/earendil-works), and **Node ≥ 18
 ```
   origin repo (you)                         shadow clone (independent copy)
   ─────────────────                         ──────────────────────────────
-  $ kage --name fix-login   ──copy + seed──►  ../my-app--fix-login
-                                              $ pi -c   (your recent context, resumed)
+  $ kage --name fix-login   ─copy + history─►  ../my-app--fix-login
+                                              $ pi      (fresh session; origin history resumable)
                                                 · git switch -c fix-login
                                                 · edit / commit / push / open PR
                                                 · quit pi
-  $ kage finish fix-login   ◄──merge memory──  (session .jsonl, deduped)
+  $ kage finish fix-login   ◄─new sessions──  (the clone's .jsonl, copied back)
         · safety check (committed? pushed?)
-        · merge session back into ~/.pi
+        · merge the clone's new sessions into ~/.pi
         · delete the clone folder
   code arrives via the merged GitHub PR ✓
 ```
@@ -82,17 +83,15 @@ Requires **git**, [**pi**](https://github.com/earendil-works), and **Node ≥ 18
 ```bash
 cd ~/code/my-app
 
-kage                       # clone . → ../my-app--kage-<ts>, seed recent context, open `pi -c`
-kage --name fix-login      # name the clone folder/branch suffix: ../my-app--fix-login
+kage                       # clone . → ../my-app--kage-<ts>, open a fresh pi (origin history resumable)
+kage --name fix-login      # name the clone folder: ../my-app--fix-login
 kage /path/to/other-repo   # clone a different repo (path defaults to cwd)
-kage --blank               # don't carry any context into the clone
-kage --recent 10           # seed the last 10 turns instead of the default 5
 
 # back in the origin after you quit the clone's pi:
 kage                       # no args inside a repo with clones -> interactive menu
-kage list                  # status dashboard: branch · dirty · ahead/behind · safe-to-clean
-kage list --pr             # also show PR state (via gh)
-kage finish fix-login      # check → merge memory back → delete the clone
+kage status                # status dashboard: branch · dirty · ahead/behind · safe-to-clean
+kage status --pr           # also show PR state (via gh)
+kage finish fix-login      # check → merge the clone's new sessions back → delete the clone
 kage finish fix-login --pr # push the branch + open a PR (via gh), then finish
 kage finish --force        # skip the uncommitted/unpushed guard
 kage rm old-experiment     # discard a clone without merging (refuses if it has local-only work)
@@ -119,9 +118,9 @@ for subcommands and clone names.
 
 | Command | Run from | What it does |
 |---|---|---|
-| `kage [path] [--name x] [--blank] [--recent N]` | origin repo | Copy the repo to `../<repo>--<name>` (default `kage-<ts>`), seed the clone's pi session with the last N turns (default 5; `--blank` for none), and launch `pi -c`. With no args (and existing clones) it opens an interactive picker. |
-| `kage list [--pr]` | origin repo | Status dashboard of clones: branch, dirty/clean, ahead/behind upstream, and a “safe to clean” flag. `--pr` adds PR state via `gh`. |
-| `kage finish [name] [--force] [--push] [--pr]` | origin (or inside the clone) | Refuse if the clone has uncommitted or unpushed work (`--force` overrides), merge its session memory back (deduped), then delete the clone. `--push` pushes the branch first; `--pr` pushes and opens a PR via `gh`. Auto-selects / prompts when there are several. |
+| `kage [path] [--name x]` | origin repo | Copy the repo to `../<repo>--<name>` (default `kage-<ts>`), copy the origin's 5 most recent pi sessions into the clone (resumable there, never replayed), and launch a **fresh** `pi` session. `--name` only names the folder — kage never creates a branch. With no args (and existing clones) it opens an interactive picker. |
+| `kage status [--pr]` | origin repo | Status dashboard of clones: branch, dirty/clean, ahead/behind upstream, and a “safe to clean” flag. `--pr` adds PR state via `gh`. (`kage list` is a kept alias.) |
+| `kage finish [name] [--force] [--push] [--pr]` | origin (or inside the clone) | Refuse if the clone has uncommitted or unpushed work (`--force` overrides), merge the clone's **new** sessions back (copied-in origin history is skipped), then delete the clone. `--push` pushes the branch first; `--pr` pushes and opens a PR via `gh`. Auto-selects / prompts when there are several. |
 | `kage rm [name] [--force]` | origin (or inside the clone) | Discard a clone **without** merging memory. Refuses if it has local-only work unless `--force`. For abandoned experiments. |
 | `kage pull <path...>` | inside a clone | Copy specific files/dirs (even gitignored ones) back to the origin at the same relative path. |
 | `kage shell-init` | shell rc | Print a shell wrapper (cd-back after `finish`/`rm`) + tab completion. Use `eval "$(kage shell-init)"`. |
@@ -134,21 +133,24 @@ Four invariants keep parallel work safe and lossless:
 1. **Isolation** — a clone is a full independent copy with its own `.git`.
 2. **Code flows back only via git/PR.** kage never copies the clone's working tree onto the origin —
    that would re-create the very collisions it avoids. `finish` makes you commit + push first.
-3. **Memory flows through `~/.pi`.** Context is *seeded in* on create and *merged back* on finish.
-   These are pi session `.jsonl` files (not the working tree), so there's zero collision risk. The
-   seeded prefix is **deduped** on the way back — only the clone's new turns are kept, so you don't
-   end up with two overlapping sessions.
+3. **Memory flows through `~/.pi`.** On create, the origin's session `.jsonl` files are copied into the
+   clone (the 5 most recent, by mtime) — so `pi`'s resume picker inside the clone surfaces them if you
+   want it, but the clone itself opens a **fresh** session (kage never replays turns or fakes a resumed
+   conversation). On `finish`, only the clone's **new** sessions are copied back; the files copied in
+   already exist in the origin (same filename) and are skipped, so nothing duplicates.
 4. **The origin is read-only to kage** — it only copies out and writes session memory; it never
    touches the origin's working tree, even while another session is live there.
 
 ## Notes & caveats
 
 - The copy is a snapshot of the origin's **current** state, **including uncommitted changes**.
-- kage **doesn't create a branch** — the clone stays on the origin's current branch. To keep the agent
-  from committing to it, kage injects a short in-context reminder into the clone's session, so the
-  agent itself is told to branch first (this reminder is deduped out when memory merges back).
-- Context seeding reads the origin's **most recent** session file. Pass `--blank` if that isn't the
-  one you want carried over.
+- kage **doesn't create a branch** — the clone stays on the origin's current branch, and kage stays out
+  of git flow entirely. Decide your own branching/PR workflow inside the clone (instruct the agent via
+  your `AGENTS.md` / project conventions).
+- The clone opens a **fresh** pi session. The origin's 5 most recent sessions are copied in and are **resumable** via
+  pi's resume picker — but if you resume one of those origin sessions in the clone and keep adding
+  turns to it, those additions won't merge back (its filename already exists in the origin, so it's
+  skipped). Resume origin history for reference; do real work in the clone's own session.
 - **Submodules**: a submodule's `.git` pointer is an absolute path and breaks on copy — run
   `git submodule update --init` in the clone.
 - Non-APFS / non-reflink filesystems fall back to a full (heavier) copy.

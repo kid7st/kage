@@ -9,20 +9,20 @@
  * Design invariants:
  *   1. Isolation   — a clone is a full independent copy (its own .git).
  *   2. Code flows back only via git/PR — kage never copies the working tree back onto the origin.
- *   3. Memory flows via ~/.pi — recent context is seeded in on create and merged back on finish
- *      (deduped). These are session .jsonl files, not the working tree, so there's no collision.
+ *   3. Memory flows via ~/.pi — the origin's session history is copied into the clone on create
+ *      (resumable, never replayed) and the clone's new sessions are merged back on finish. These
+ *      are session .jsonl files, not the working tree, so there's no collision.
  *   4. The origin is read-only to kage — it only copies out and writes session memory.
  *
  * Commands:
- *   kage [path] [--name x] [--blank] [--recent N]   clone repo + launch pi (no args: interactive)
- *   kage list [--pr]                                 dashboard of clones (+ PR status via gh)
+ *   kage [path] [--name x]                           clone repo + launch a fresh pi (no args: interactive)
+ *   kage status [--pr]                               dashboard of clones (+ PR status via gh)
  *   kage finish [name] [--force]                     check -> merge memory back -> delete clone
  *   kage rm [name] [--force]                         discard a clone (no merge)
  *   kage pull <path...>                              (inside a clone) copy files back to the origin
  */
 
-import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -30,6 +30,7 @@ import readline from "node:readline";
 
 const MARKER = ".kage.json";
 const SESSIONS = process.env.KAGE_SESSIONS_DIR || join(homedir(), ".pi", "agent", "sessions");
+const RECENT_SESSIONS = 5; // how many of the origin's most-recent sessions to copy into a clone
 
 // ── output helpers ───────────────────────────────────────────────────────────
 const TTY = process.stderr.isTTY;
@@ -76,19 +77,50 @@ function readMarker(dir) {
 	}
 }
 
-function mtime(p) {
-	try {
-		return statSync(p).mtimeMs;
-	} catch {
-		return 0;
-	}
-}
-
 /** Copy a whole directory: clonefile on macOS, reflink on Linux, plain copy as fallback. */
 function copyTree(src, dst) {
 	const isMac = process.platform === "darwin";
 	let r = sh("cp", isMac ? ["-c", "-R", src, dst] : ["--reflink=auto", "-R", src, dst]);
 	if (!r.ok) r = sh("cp", ["-R", src, dst]);
+	return r;
+}
+
+/** An indeterminate spinner on stderr (no-op when not a TTY). Returns { stop() }. */
+function spinner(label) {
+	if (!process.stderr.isTTY) return { stop() {} };
+	const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+	const t0 = Date.now();
+	let i = 0;
+	const tick = () => {
+		const s = ((Date.now() - t0) / 1000).toFixed(1);
+		process.stderr.write(`\r\x1b[2K${paint.cyan(frames[(i = (i + 1) % frames.length)])} ${label} ${paint.dim(`${s}s`)}`);
+	};
+	tick();
+	const id = setInterval(tick, 80);
+	return {
+		stop() {
+			clearInterval(id);
+			process.stderr.write("\r\x1b[2K");
+		},
+	};
+}
+
+/** Copy the repo with a spinner (the copy can be slow on non-reflink filesystems). */
+async function copyRepo(src, dst) {
+	const isMac = process.platform === "darwin";
+	const primary = isMac ? ["-c", "-R", src, dst] : ["--reflink=auto", "-R", src, dst];
+	const tryCp = (args) =>
+		new Promise((res) => {
+			const p = spawn("cp", args, { stdio: ["ignore", "ignore", "pipe"] });
+			let err = "";
+			p.stderr.on("data", (d) => (err += d));
+			p.on("error", (e) => res({ ok: false, err: e.message }));
+			p.on("close", (code) => res({ ok: code === 0, err: err.trim() }));
+		});
+	const sp = spinner(`copying ${basename(dst)}`);
+	let r = await tryCp(primary);
+	if (!r.ok) r = await tryCp(["-R", src, dst]);
+	sp.stop();
 	return r;
 }
 
@@ -192,10 +224,13 @@ function select(title, labels) {
 	});
 }
 
-async function ask(prompt) {
+async function ask(prompt, prefill) {
 	if (!process.stdin.isTTY) return "";
 	const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
-	const a = await new Promise((r) => rl.question(prompt, (x) => (rl.close(), r(x))));
+	const a = await new Promise((r) => {
+		rl.question(prompt, (x) => (rl.close(), r(x)));
+		if (prefill) rl.write(prefill); // pre-fill an editable default: Enter accepts, or edit it
+	});
 	return a.trim();
 }
 
@@ -227,87 +262,47 @@ async function pickClone(action, name) {
 	return { originRepo, clone: clones[idx] };
 }
 
-// ── build the clone's pi session: seeded context + a kage operational reminder ──
+// ── copy the origin's session history into the clone ─────────────────────────
 /**
- * Writes the clone's session: the origin's last N turns (unless blank) followed by an
- * in-context reminder telling the agent it's in a clone and to branch before committing.
- * The reminder is the leaf and `seedLeafId` points at it, so the whole seeded prefix
- * (context + reminder) is deduped out when memory merges back to the origin.
+ * Copies the origin's most recent session files (up to RECENT_SESSIONS, by mtime) into the
+ * clone's session dir, so `pi` resume inside the clone surfaces them (you decide whether to
+ * resume any of it). The clone itself opens a fresh session — kage never replays turns or
+ * fabricates a "resumed" conversation. On merge-back these copied files already exist in
+ * the origin (same filename) and are skipped, so only the clone's new sessions return.
  */
-function buildCloneSession(originRepo, cloneDir, recentTurns, blank) {
-	let kept = [];
-	let turns = 0;
-	let preview;
-	let srcFile;
-
-	if (!blank) {
-		const srcDir = sessionDirFor(originRepo);
-		if (existsSync(srcDir)) {
-			const files = readdirSync(srcDir)
-				.filter((f) => f.endsWith(".jsonl"))
-				.map((f) => ({ f, m: mtime(join(srcDir, f)) }))
-				.sort((a, b) => b.m - a.m);
-			if (files.length) {
-				srcFile = join(srcDir, files[0].f);
-				const lines = readFileSync(srcFile, "utf8").split("\n").filter((l) => l.trim());
-				if (lines.length >= 2) {
-					const entries = lines.slice(1).map((l) => JSON.parse(l));
-					const byId = new Map(entries.map((e) => [e.id, e]));
-					let cur = entries[entries.length - 1];
-					const branch = [];
-					while (cur) {
-						branch.unshift(cur);
-						cur = cur.parentId ? byId.get(cur.parentId) : undefined;
-					}
-					const messages = branch.filter((e) => e.type === "message");
-					const userIdx = [];
-					messages.forEach((e, i) => {
-						if (e.message?.role === "user") userIdx.push(i);
-					});
-					const start = userIdx.length > recentTurns ? userIdx[userIdx.length - recentTurns] : 0;
-					kept = messages.slice(start);
-					turns = userIdx.length > recentTurns ? recentTurns : userIdx.length;
-					const fu = kept.find((e) => e.message?.role === "user");
-					preview = fu ? snippet(fu.message.content) : undefined;
-				}
-			}
-		}
-	}
-
+function copyOriginHistory(originRepo, cloneDir) {
+	const srcDir = sessionDirFor(originRepo);
+	if (!existsSync(srcDir)) return 0;
 	const destDir = sessionDirFor(cloneDir);
 	mkdirSync(destDir, { recursive: true });
-	const id = randomUUID();
-	const ts = new Date().toISOString();
-	const fname = `${ts.replace(/[:.]/g, "-")}_${id}.jsonl`;
-	const header = { type: "session", version: 3, id, timestamp: ts, cwd: cloneDir, ...(srcFile ? { parentSession: srcFile } : {}) };
-	const outl = [JSON.stringify(header)];
-	let prev = null;
-	for (const e of kept) {
-		outl.push(JSON.stringify({ ...e, parentId: prev }));
-		prev = e.id;
+	const recent = readdirSync(srcDir)
+		.filter((f) => f.endsWith(".jsonl"))
+		.map((f) => ({ f, m: statSync(join(srcDir, f)).mtimeMs }))
+		.sort((a, b) => b.m - a.m)
+		.slice(0, RECENT_SESSIONS);
+	let n = 0;
+	for (const { f } of recent) {
+		const lines = readFileSync(join(srcDir, f), "utf8").split("\n");
+		try {
+			const header = JSON.parse(lines[0]);
+			header.cwd = cloneDir;
+			lines[0] = JSON.stringify(header);
+		} catch {
+			/* leave malformed header as-is */
+		}
+		writeFileSync(join(destDir, f), lines.join("\n"));
+		n++;
 	}
-
-	const curBranch = git(cloneDir, ["rev-parse", "--abbrev-ref", "HEAD"]).out || "the base branch";
-	const hintId = randomUUID().replace(/-/g, "").slice(0, 8);
-	const hint =
-		`[kage] You are working in a shadow clone of ${originRepo} (folder: ${cloneDir}), ` +
-		`currently on branch "${curBranch}". Before committing, create a dedicated feature branch ` +
-		`(git switch -c <name>), then push it and open a PR — do not commit directly to "${curBranch}".`;
-	outl.push(
-		JSON.stringify({ type: "custom_message", id: hintId, parentId: prev, timestamp: ts, customType: "kage", content: hint, display: true }),
-	);
-	writeFileSync(join(destDir, fname), outl.join("\n") + "\n");
-	return { seedFile: fname, seedLeafId: hintId, turns, preview, seeded: kept.length > 0 };
+	return n;
 }
 
-function snippet(content) {
-	const text = typeof content === "string" ? content : (content || []).map((c) => c.text || "").join(" ");
-	const one = text.replace(/\s+/g, " ").trim();
-	return one.length > 60 ? one.slice(0, 57) + "…" : one;
-}
-
-// ── merge session memory back (deduped) ──────────────────────────────────────
-function mergeBack(cloneDir, originRepo, marker) {
+// ── merge the clone's new sessions back into the origin ──────────────────────
+/**
+ * Copies the clone's session files into the origin's session dir. Files that already exist
+ * (the origin history we copied in on create) are skipped, so only sessions the clone
+ * created return. No dedup/slicing — the clone's sessions are independent of the origin's.
+ */
+function mergeBack(cloneDir, originRepo) {
 	const srcDir = sessionDirFor(cloneDir);
 	if (!existsSync(srcDir)) return 0;
 	const destDir = sessionDirFor(originRepo);
@@ -326,25 +321,7 @@ function mergeBack(cloneDir, originRepo, marker) {
 			continue;
 		}
 		header.cwd = originRepo;
-		let body = lines.slice(1);
-
-		if (marker?.seedFile === f && marker?.seedLeafId) {
-			const idx = body.findIndex((l) => {
-				try {
-					return JSON.parse(l).id === marker.seedLeafId;
-				} catch {
-					return false;
-				}
-			});
-			if (idx >= 0) {
-				body = body.slice(idx + 1);
-				if (body.length === 0) continue;
-				const first = JSON.parse(body[0]);
-				first.parentId = null;
-				body[0] = JSON.stringify(first);
-			}
-		}
-		writeFileSync(dest, [JSON.stringify(header), ...body].join("\n") + "\n");
+		writeFileSync(dest, [JSON.stringify(header), ...lines.slice(1)].join("\n") + "\n");
 		n++;
 	}
 	try {
@@ -381,7 +358,7 @@ async function cmdNew(argv) {
 	let path = positional[0];
 
 	// Interactive launcher: `kage` with no args, inside a repo that already has clones.
-	if (!path && !flags.name && !flags.blank && process.stdin.isTTY) {
+	if (!path && !flags.name && process.stdin.isTTY) {
 		const repoRoot = repoTopLevel(process.cwd());
 		const clones = repoRoot ? listClones(repoRoot) : [];
 		if (clones.length > 0) {
@@ -408,35 +385,38 @@ async function cmdNew(argv) {
 				if (act === 2) return cmdRm([clone.name]);
 				return info("cancelled");
 			}
-			const nm = await ask("Name (blank = auto): ");
-			if (nm) flags.name = nm;
+			// idx === 0: "create" — fall through to the name prompt below.
 		}
 	}
 
 	const targetPath = path ? resolve(path) : process.cwd();
-	const blank = !!flags.blank;
-	const recent = Math.max(1, parseInt(flags.recent, 10) || 5);
 
 	const repoRoot = repoTopLevel(targetPath);
 	if (!repoRoot) die(`not a git repository: ${targetPath}`);
 	if (existsSync(join(repoRoot, MARKER))) die("already inside a clone; run kage from the origin repo");
 
-	const name = (typeof flags.name === "string" && flags.name) || tsName();
+	// Resolve the clone name: explicit --name wins; otherwise show the full folder name with
+	// the fixed "<repo>--" prefix in the prompt and an editable default suffix — press Enter to
+	// accept, or edit the suffix (non-interactive falls back to the default).
+	let name = typeof flags.name === "string" && flags.name ? flags.name : "";
+	if (!name) {
+		const def = tsName();
+		const prompt = `Kage name: ${basename(repoRoot)}--`;
+		name = (process.stdin.isTTY ? await ask(prompt, def) : "") || def;
+	}
 	const safe = name.replace(/\//g, "-");
 	const cloneDir = join(dirname(repoRoot), `${basename(repoRoot)}--${safe}`);
 	if (existsSync(cloneDir)) die(`directory already exists: ${cloneDir}`);
 
-	const cp = copyTree(repoRoot, cloneDir);
+	const cp = await copyRepo(repoRoot, cloneDir);
 	if (!cp.ok) die(`copy failed: ${cp.err}`);
 
 	// kage does NOT create a branch — the clone stays on the origin's current branch.
-	const built = buildCloneSession(repoRoot, cloneDir, recent, blank);
+	const histN = copyOriginHistory(repoRoot, cloneDir);
 	const marker = {
 		originRepo: repoRoot,
 		name: safe,
 		createdAt: new Date().toISOString(),
-		seedFile: built.seedFile,
-		seedLeafId: built.seedLeafId,
 	};
 	writeFileSync(join(cloneDir, MARKER), JSON.stringify(marker, null, 2));
 
@@ -444,17 +424,11 @@ async function cmdNew(argv) {
 	info("");
 	info(`🥷 ${paint.bold("Shadow clone ready")}: ${cloneDir}`);
 	info(`   origin: ${repoRoot}   branch: ${paint.cyan(curBranch)}`);
-	if (built.seeded) {
-		info(`   seeded with the last ${built.turns} turn(s) + a kage reminder (pi -c resumes them)`);
-		if (built.preview) info(paint.dim(`     ↳ "${built.preview}"`));
-	} else {
-		info(paint.dim("   blank clone (kage reminder only)"));
-	}
-	info(paint.yellow(`   ⚠  create a feature branch before committing (clone is on ${curBranch})`));
+	if (histN > 0) info(paint.dim(`   origin's ${histN} session(s) are available via resume (pi: pick from the list)`));
 	info(paint.dim(`   when done: kage finish ${safe}`));
 	info("");
 
-	launchPi(cloneDir, ["-c"]);
+	launchPi(cloneDir, []);
 	info("");
 	info(`↩︎  left the clone's pi. To finish: ${paint.bold(`kage finish ${safe}`)}`);
 }
@@ -503,7 +477,7 @@ async function cmdFinish(argv) {
 		if (problems.length) die(`${clone.name}: ${problems.join(", ")} — push your work, or pass --force`);
 	}
 
-	const n = mergeBack(clone.dir, originRepo, clone.marker);
+	const n = mergeBack(clone.dir, originRepo);
 	try {
 		process.chdir(originRepo);
 	} catch {
@@ -583,7 +557,7 @@ function cmdList(argv) {
 		info(`  ${c.name.padEnd(nameW)}  ${paint.cyan(s.branch.padEnd(brW))}  ${dirty}  ${sync}${prStr}${safe}`);
 	}
 	info("");
-	info(paint.dim("  finish <name> to merge & remove · rm <name> to discard · list --pr for PR status"));
+	info(paint.dim("  finish <name> to merge & remove · rm <name> to discard · status --pr for PR status"));
 }
 
 function prState(pr) {
@@ -634,7 +608,7 @@ kage() {
 }
 if [ -n "$ZSH_VERSION" ]; then
   _kage() {
-    if (( CURRENT == 2 )); then compadd new list finish rm pull; return; fi
+    if (( CURRENT == 2 )); then compadd new status finish rm pull; return; fi
     case "\${words[2]}" in
       finish|rm) compadd $(command kage __clones 2>/dev/null);;
     esac
@@ -643,7 +617,7 @@ if [ -n "$ZSH_VERSION" ]; then
 elif [ -n "$BASH_VERSION" ]; then
   _kage() {
     local cur="\${COMP_WORDS[COMP_CWORD]}"
-    if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=( $(compgen -W "new list finish rm pull" -- "$cur") ); return; fi
+    if [ "$COMP_CWORD" -eq 1 ]; then COMPREPLY=( $(compgen -W "new status finish rm pull" -- "$cur") ); return; fi
     case "\${COMP_WORDS[1]}" in
       finish|rm) COMPREPLY=( $(compgen -W "$(command kage __clones 2>/dev/null)" -- "$cur") );;
     esac
@@ -660,20 +634,40 @@ function cmdClones() {
 const HELP = `kage 🥷 — Shadow Clone Jutsu for your git repo
 
 Usage:
-  kage [path] [--name <x>] [--blank] [--recent <N>]   clone repo + launch pi
+  kage [path] [--name <x>]                             clone repo + launch a fresh pi
                                                        (no args inside a repo with clones: interactive menu)
-  kage list [--pr]                                     dashboard of clones (--pr adds PR status via gh)
+  kage status [--pr]                                   dashboard of clones (--pr adds PR status via gh)
   kage finish [name] [--force] [--push] [--pr]         check -> merge memory back -> delete clone
                                                        (--push: push first · --pr: push + open a PR via gh)
   kage rm [name] [--force]                             discard a clone without merging
   kage pull <path...>                                  (inside a clone) copy files back to the origin
   kage shell-init                                      shell wrapper (cd-back) + tab completion
+  kage --help | --version                              show this help / print the version
+
+With no args inside a repo that already has clones, kage opens an interactive menu
+(create a new clone, or enter / finish / remove an existing one).
 
 Options:
-  --name <x>    name the clone folder /<repo>--<x> (default: kage-<timestamp>)
-  --blank       don't seed the clone with the origin's recent context
-  --recent <N>  number of recent turns to seed (default: 5)
-  --force       skip the safety checks (finish/rm)
+  --name <x>    name the clone folder /<repo>--<x> (default: kage-<timestamp>); skips the name prompt
+  --pr          (finish) push the branch and open a GitHub PR via gh, then finish
+  --push        (finish) push the branch before finishing (implied by --pr)
+  --force       skip the safety checks: uncommitted/unpushed guard (finish) or local-only guard (rm)
+
+Examples:
+  kage                          # clone the current repo, pick a name, open a fresh pi to work in
+  kage --name fix-login         # same, but name the clone ../<repo>--fix-login (no prompt)
+  kage ~/code/other-repo        # clone a different repo instead of the current dir
+
+  kage status                   # in the origin: list your clones + their git state
+  kage status --pr              # ...also show each clone's PR state (needs gh)
+
+  # after you've worked in a clone (committed your changes), from the origin:
+  kage finish fix-login         # you already pushed -> merge memory back, delete the clone
+  kage finish fix-login --pr    # push the branch + open a PR via gh, then finish
+  kage finish fix-login --force # finish even with uncommitted/unpushed work
+  kage rm experiment            # throw a clone away without merging its memory
+
+  kage pull .env                # inside a clone: copy a gitignored file back to the origin
 
 Env:
   KAGE_SESSIONS_DIR   pi session storage (default: ~/.pi/agent/sessions)`;
@@ -684,7 +678,8 @@ async function main() {
 		case undefined:
 		case "new":
 			return cmdNew(sub === "new" ? rest : process.argv.slice(2));
-		case "list":
+		case "status":
+		case "list": // alias
 			return cmdList(rest);
 		case "finish":
 			return cmdFinish(rest);
