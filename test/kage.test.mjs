@@ -308,3 +308,22 @@ test("rm discards a clone (with --force)", () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("rm accepts a clone path and works from outside any repo", () => {
+	const root = tmp(); // not a git repo
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--p");
+	try {
+		run(["--name", "p"], { cwd: repo, env });
+		assert.ok(existsSync(clone));
+		// run from `root` (NOT a git repo), passing the clone path
+		const r = run(["rm", clone, "--force"], { cwd: root, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.ok(!existsSync(clone), "clone removed via path from a non-repo cwd");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

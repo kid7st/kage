@@ -30,7 +30,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import readline from "node:readline";
 
-const VERSION = "0.3.0"; // keep in sync with package.json (enforced by test)
+const VERSION = "0.3.1"; // keep in sync with package.json (enforced by test)
 const MARKER = ".kage.json";
 const SESSIONS = process.env.KAGE_SESSIONS_DIR || join(homedir(), ".pi", "agent", "sessions");
 const RECENT_SESSIONS = 5; // how many of the origin's most-recent sessions to copy into a clone
@@ -287,8 +287,15 @@ async function pickClone(action, name) {
 	const here = repoTopLevel(process.cwd());
 	const hm = here && readMarker(here);
 	if (hm && !name) return { originRepo: hm.originRepo, clone: { dir: here, name: hm.name || basename(here), marker: hm } };
+	// If `name` resolves to a clone directory, use its marker directly — works from anywhere,
+	// even outside a repo (e.g. `kage rm ../app--fix` from the parent dir).
+	if (name) {
+		const asPath = resolve(name);
+		const pm = readMarker(asPath);
+		if (pm) return { originRepo: pm.originRepo, clone: { dir: asPath, name: pm.name || basename(asPath), marker: pm } };
+	}
 	const originRepo = hm ? hm.originRepo : here;
-	if (!originRepo) die("not a git repository");
+	if (!originRepo) die("not a git repository (run inside the repo or clone, or pass a path to a clone)");
 	const clones = listClones(originRepo);
 	if (clones.length === 0) die("no shadow clones found for this repo");
 	if (name) {
