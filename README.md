@@ -139,8 +139,9 @@ Four invariants keep parallel work safe and lossless:
 3. **Memory flows through `~/.pi`.** On create, the origin's session `.jsonl` files are copied into the
    clone (the 5 most recent, by mtime) — so `pi`'s resume picker inside the clone surfaces them if you
    want it, but the clone itself opens a **fresh** session (kage never replays turns or fakes a resumed
-   conversation). On `finish`, only the clone's **new** sessions are copied back; the files copied in
-   already exist in the origin (same filename) and are skipped, so nothing duplicates.
+   conversation). On `finish`, sessions the clone created are copied back whole; for a copied-in origin
+   session, only records the origin is missing (by id) are appended — so an unchanged copy adds nothing,
+   but turns you added by resuming it in the clone are preserved, and nothing duplicates.
 4. **The origin is read-only to kage** — it only copies out and writes session memory; it never
    touches the origin's working tree, even while another session is live there.
 
@@ -151,9 +152,14 @@ Four invariants keep parallel work safe and lossless:
   of git flow entirely. Decide your own branching/PR workflow inside the clone (instruct the agent via
   your `AGENTS.md` / project conventions).
 - The clone opens a **fresh** pi session. The origin's 5 most recent sessions are copied in and are **resumable** via
-  pi's resume picker — but if you resume one of those origin sessions in the clone and keep adding
-  turns to it, those additions won't merge back (its filename already exists in the origin, so it's
-  skipped). Resume origin history for reference; do real work in the clone's own session.
+  pi's resume picker. Real work belongs in the clone's own fresh session, but if you do resume a copied
+  origin session and add turns, those turns are appended back to that origin session on `finish` (merged
+  by record id, so nothing is lost or duplicated).
+- **Upgrading from an older kage:** clones created before the copy-in/fresh-session redesign carry a
+  fabricated *seed* session in their `.kage.json` (`seedFile`/`seedLeafId`). `finish` no longer special-
+  cases those, so finishing such a clone would copy the replayed seed context back into the origin. For
+  any clone created by an older kage, prefer `kage rm` (the code is already on its branch / PR) instead
+  of `kage finish`.
 - **No remote?** `finish` still works losslessly: committed work that isn't on a remote is fetched into
   the origin as a local `kage/<name>` branch (`git merge kage/<name>` to integrate it). With a remote
   configured, `finish` keeps nudging you to push first (so PR-flow mistakes surface) unless you

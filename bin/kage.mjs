@@ -24,7 +24,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import readline from "node:readline";
@@ -293,8 +293,8 @@ async function pickClone(action, name) {
  * Copies the origin's most recent session files (up to RECENT_SESSIONS, by mtime) into the
  * clone's session dir, so `pi` resume inside the clone surfaces them (you decide whether to
  * resume any of it). The clone itself opens a fresh session — kage never replays turns or
- * fabricates a "resumed" conversation. On merge-back these copied files already exist in
- * the origin (same filename) and are skipped, so only the clone's new sessions return.
+ * fabricates a "resumed" conversation. On merge-back an unchanged copy adds nothing; if you
+ * resumed one and added turns, only those new records are appended back (see mergeBack).
  */
 function copyOriginHistory(originRepo, cloneDir) {
 	const srcDir = sessionDirFor(originRepo);
@@ -324,9 +324,12 @@ function copyOriginHistory(originRepo, cloneDir) {
 
 // ── merge the clone's new sessions back into the origin ──────────────────────
 /**
- * Copies the clone's session files into the origin's session dir. Files that already exist
- * (the origin history we copied in on create) are skipped, so only sessions the clone
- * created return. No dedup/slicing — the clone's sessions are independent of the origin's.
+ * Copies the clone's sessions into the origin's session dir:
+ *   - a session the clone created (filename not in the origin) -> copied back whole.
+ *   - a copied-in origin session (filename already in the origin) -> only the records the
+ *     origin doesn't already have (by id) are appended, so turns added by *resuming* that
+ *     copied session inside the clone are preserved instead of dropped. Unchanged copies add
+ *     nothing and are left alone.
  */
 function mergeBack(cloneDir, originRepo) {
 	const srcDir = sessionDirFor(cloneDir);
@@ -336,18 +339,42 @@ function mergeBack(cloneDir, originRepo) {
 	let n = 0;
 	for (const f of readdirSync(srcDir)) {
 		if (!f.endsWith(".jsonl")) continue;
+		const src = readFileSync(join(srcDir, f), "utf8").split("\n").filter((l) => l.trim());
+		if (src.length === 0) continue;
 		const dest = join(destDir, f);
-		if (existsSync(dest)) continue;
-		const lines = readFileSync(join(srcDir, f), "utf8").split("\n").filter((l) => l.trim());
-		if (lines.length === 0) continue;
-		let header;
-		try {
-			header = JSON.parse(lines[0]);
-		} catch {
+
+		if (!existsSync(dest)) {
+			let header;
+			try {
+				header = JSON.parse(src[0]);
+			} catch {
+				continue;
+			}
+			header.cwd = originRepo;
+			writeFileSync(dest, [JSON.stringify(header), ...src.slice(1)].join("\n") + "\n");
+			n++;
 			continue;
 		}
-		header.cwd = originRepo;
-		writeFileSync(dest, [JSON.stringify(header), ...lines.slice(1)].join("\n") + "\n");
+
+		// Existing origin session: append only records the origin is missing (by id).
+		const have = new Set();
+		for (const l of readFileSync(dest, "utf8").split("\n")) {
+			if (!l.trim()) continue;
+			try {
+				have.add(JSON.parse(l).id);
+			} catch {
+				/* ignore */
+			}
+		}
+		const extra = src.slice(1).filter((l) => {
+			try {
+				return !have.has(JSON.parse(l).id);
+			} catch {
+				return false;
+			}
+		});
+		if (extra.length === 0) continue;
+		appendFileSync(dest, extra.join("\n") + "\n");
 		n++;
 	}
 	try {

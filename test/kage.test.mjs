@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -175,6 +175,42 @@ test("finish --push pushes the branch then finishes", () => {
 		// the branch should now exist on the remote
 		const ls = spawnSync("git", ["ls-remote", "--heads", join(root, "remote.git"), "feat"], { encoding: "utf8" });
 		assert.match(ls.stdout, /refs\/heads\/feat/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("resuming a copied-in origin session and adding turns merges those turns back (not dropped)", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const sessions = join(root, "sessions");
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: sessions };
+
+	const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+	const enc = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
+	const originDir = join(sessions, enc(top));
+	mkdirSync(originDir, { recursive: true });
+	const histName = "2026-01-01T00-00-00-000Z_cccccccc-0000-0000-0000-000000000000.jsonl";
+	const rec = (o) => JSON.stringify(o);
+	writeFileSync(
+		join(originDir, histName),
+		[rec({ type: "session", version: 3, id: "hist", cwd: top }), rec({ type: "message", id: "r1" }), rec({ type: "message", id: "r2" })].join("\n") + "\n",
+	);
+
+	const clone = join(root, "repo--r1");
+	try {
+		run(["--name", "r1"], { cwd: repo, env });
+		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--r1--")));
+		// simulate resuming the copied origin session in the clone and adding a new turn
+		appendFileSync(join(cloneSessDir, histName), rec({ type: "message", id: "r3" }) + "\n");
+
+		run(["finish", "r1", "--force"], { cwd: repo, env });
+		const merged = readFileSync(join(originDir, histName), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+		const ids = merged.map((e) => e.id);
+		assert.ok(ids.includes("r3"), "the appended turn should be merged back");
+		assert.equal(ids.filter((i) => i === "r1").length, 1, "existing records must not be duplicated");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
