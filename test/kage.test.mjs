@@ -242,9 +242,9 @@ test("finish with no remote preserves the clone's commits into the origin as kag
 		assert.equal(r.status, 0, r.stderr);
 		assert.ok(!existsSync(clone), "clone removed");
 
-		// the commits now live in the origin under refs/heads/kage/local
-		const ref = spawnSync("git", ["rev-parse", "kage/local"], { cwd: repo, encoding: "utf8" });
-		assert.equal(ref.stdout.trim(), cloneHead, "origin has kage/local pointing at the clone's commit");
+		// the commits now live in the origin under refs/heads/kage/<name>-<sha7>
+		const ref = spawnSync("git", ["rev-parse", `kage/local-${cloneHead.slice(0, 7)}`], { cwd: repo, encoding: "utf8" });
+		assert.equal(ref.stdout.trim(), cloneHead, "origin has the preserved branch pointing at the clone's commit");
 		// origin's working tree was left untouched (no b.txt checked out)
 		assert.ok(!existsSync(join(repo, "b.txt")), "origin working tree untouched");
 	} finally {

@@ -133,7 +133,7 @@ Four invariants keep parallel work safe and lossless:
 1. **Isolation** — a clone is a full independent copy with its own `.git`.
 2. **Code flows back via git, never the working tree.** With a remote you push the branch and merge a
    PR; with **no remote**, `finish` fetches the clone's branch into the origin's git as a local
-   `kage/<name>` branch (the origin's working tree is left untouched — merge it when you like). Either
+   `kage/<name>-<sha>` branch (the origin's working tree is left untouched — merge it when you like). Either
    way kage never copies the clone's working tree onto the origin, which would re-create the collisions
    it avoids. `finish` still refuses to delete **uncommitted** work (it can't be preserved by a fetch).
 3. **Memory flows through `~/.pi`.** On create, the origin's session `.jsonl` files are copied into the
@@ -162,7 +162,8 @@ Four invariants keep parallel work safe and lossless:
   any clone created by an older kage, prefer `kage rm` (the code is already on its branch / PR) instead
   of `kage finish`.
 - **No remote?** `finish` still works losslessly: committed work that isn't on a remote is fetched into
-  the origin as a local `kage/<name>` branch (`git merge kage/<name>` to integrate it). With a remote
+  the origin as a local `kage/<name>-<sha>` branch (the exact name is printed; `git merge` it to
+  integrate). The short sha keeps the ref unique, so reusing a clone name never collides. With a remote
   configured, `finish` keeps nudging you to push first (so PR-flow mistakes surface) unless you
   `--push`/`--pr` or `--force`.
 - **Submodules**: a submodule's `.git` pointer is an absolute path and breaks on copy — run

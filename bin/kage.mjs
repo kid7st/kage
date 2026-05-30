@@ -557,7 +557,10 @@ async function cmdFinish(argv) {
 	// as a local 'kage/<name>' branch (origin's working tree is left untouched). This is what
 	// makes finish lossless without GitHub — the commits land in the origin's git, ready to merge.
 	if (hasUnpreservedCommits(originRepo, clone.dir, s)) {
-		const target = `kage/${clone.name}`;
+		const head = git(clone.dir, ["rev-parse", "HEAD"]).out;
+		// Always a unique ref (name + short sha) so reusing a clone name never collides with an
+		// earlier preserved branch — which would either abort the fetch (non-ff) or clobber it.
+		const target = `kage/${clone.name}-${head.slice(0, 7)}`;
 		const r = git(originRepo, ["fetch", clone.dir, `${s.branch}:refs/heads/${target}`]);
 		if (!r.ok) die(`failed to preserve the clone's branch into the origin: ${r.err}`);
 		info(`🌿 preserved the clone's commits in the origin as ${paint.cyan(target)}  (merge with: git merge ${target})`);
@@ -734,7 +737,7 @@ Usage:
   kage status [--pr]                                   dashboard of clones (--pr adds PR status via gh)
   kage finish [name] [--force] [--push] [--pr]         preserve work -> merge memory back -> delete clone
                                                        (--push/--pr use a remote; with no remote the branch is
-                                                        kept in the origin as a local 'kage/<name>' branch)
+                                                        kept in the origin as a local 'kage/<name>-<sha>' branch)
   kage rm [name] [--force]                             discard a clone without merging
   kage pull <path...>                                  (inside a clone) copy files back to the origin
   kage shell-init                                      shell wrapper (cd-back) + tab completion
