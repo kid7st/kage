@@ -699,7 +699,12 @@ async function main() {
 		case "--version":
 			return info(JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version);
 		default:
-			return cmdNew(process.argv.slice(2)); // unknown subcommand -> treat as `kage <path>`
+			// `kage <path>` clones another repo, but a bare word that isn't an existing directory
+			// is a mistyped command (e.g. `kage statsu`) — fail clearly instead of "not a git repository".
+			if (!sub.startsWith("-") && !(existsSync(resolve(sub)) && statSync(resolve(sub)).isDirectory())) {
+				die(`unknown command or path: ${sub}  (run 'kage --help')`);
+			}
+			return cmdNew(process.argv.slice(2)); // `kage <path>` or `kage <flags>`
 	}
 }
 
