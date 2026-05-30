@@ -131,8 +131,11 @@ for subcommands and clone names.
 Four invariants keep parallel work safe and lossless:
 
 1. **Isolation** — a clone is a full independent copy with its own `.git`.
-2. **Code flows back only via git/PR.** kage never copies the clone's working tree onto the origin —
-   that would re-create the very collisions it avoids. `finish` makes you commit + push first.
+2. **Code flows back via git, never the working tree.** With a remote you push the branch and merge a
+   PR; with **no remote**, `finish` fetches the clone's branch into the origin's git as a local
+   `kage/<name>` branch (the origin's working tree is left untouched — merge it when you like). Either
+   way kage never copies the clone's working tree onto the origin, which would re-create the collisions
+   it avoids. `finish` still refuses to delete **uncommitted** work (it can't be preserved by a fetch).
 3. **Memory flows through `~/.pi`.** On create, the origin's session `.jsonl` files are copied into the
    clone (the 5 most recent, by mtime) — so `pi`'s resume picker inside the clone surfaces them if you
    want it, but the clone itself opens a **fresh** session (kage never replays turns or fakes a resumed
@@ -151,6 +154,10 @@ Four invariants keep parallel work safe and lossless:
   pi's resume picker — but if you resume one of those origin sessions in the clone and keep adding
   turns to it, those additions won't merge back (its filename already exists in the origin, so it's
   skipped). Resume origin history for reference; do real work in the clone's own session.
+- **No remote?** `finish` still works losslessly: committed work that isn't on a remote is fetched into
+  the origin as a local `kage/<name>` branch (`git merge kage/<name>` to integrate it). With a remote
+  configured, `finish` keeps nudging you to push first (so PR-flow mistakes surface) unless you
+  `--push`/`--pr` or `--force`.
 - **Submodules**: a submodule's `.git` pointer is an absolute path and breaks on copy — run
   `git submodule update --init` in the clone.
 - Non-APFS / non-reflink filesystems fall back to a full (heavier) copy.

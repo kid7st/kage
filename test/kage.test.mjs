@@ -180,6 +180,36 @@ test("finish --push pushes the branch then finishes", () => {
 	}
 });
 
+test("finish with no remote preserves the clone's commits into the origin as kage/<name>", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo); // a plain repo with NO remote
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--local");
+	try {
+		run(["--name", "local"], { cwd: repo, env });
+		// commit work in the clone (still on the base branch, no remote to push to)
+		writeFileSync(join(clone, "b.txt"), "x\n");
+		spawnSync("git", ["add", "."], { cwd: clone });
+		spawnSync("git", ["commit", "-qm", "local work"], { cwd: clone });
+		const cloneHead = spawnSync("git", ["rev-parse", "HEAD"], { cwd: clone, encoding: "utf8" }).stdout.trim();
+
+		// finish without --force should succeed (no remote -> preserve locally, not refuse)
+		const r = run(["finish", "local"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.ok(!existsSync(clone), "clone removed");
+
+		// the commits now live in the origin under refs/heads/kage/local
+		const ref = spawnSync("git", ["rev-parse", "kage/local"], { cwd: repo, encoding: "utf8" });
+		assert.equal(ref.stdout.trim(), cloneHead, "origin has kage/local pointing at the clone's commit");
+		// origin's working tree was left untouched (no b.txt checked out)
+		assert.ok(!existsSync(join(repo, "b.txt")), "origin working tree untouched");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("rm discards a clone (with --force)", () => {
 	const root = tmp();
 	const repo = join(root, "repo");
@@ -190,7 +220,11 @@ test("rm discards a clone (with --force)", () => {
 	try {
 		run(["--name", "gone"], { cwd: repo, env });
 		assert.ok(existsSync(clone));
-		// without --force and non-interactive: refuses (local-only work / can't confirm)
+		// give the clone local-only committed work
+		writeFileSync(join(clone, "b.txt"), "x\n");
+		spawnSync("git", ["add", "."], { cwd: clone });
+		spawnSync("git", ["commit", "-qm", "work"], { cwd: clone });
+		// without --force: refuses (local-only work would be discarded without merging)
 		const refused = run(["rm", "gone"], { cwd: repo, env });
 		assert.notEqual(refused.status, 0);
 		assert.ok(existsSync(clone), "clone should still exist after refused rm");

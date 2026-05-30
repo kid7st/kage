@@ -8,7 +8,8 @@
  *
  * Design invariants:
  *   1. Isolation   — a clone is a full independent copy (its own .git).
- *   2. Code flows back only via git/PR — kage never copies the working tree back onto the origin.
+ *   2. Code flows back via git only — a remote PR, or (no remote) a fetch of the clone's branch
+ *      into the origin's git on finish; kage never copies the working tree back onto the origin.
  *   3. Memory flows via ~/.pi — the origin's session history is copied into the clone on create
  *      (resumable, never replayed) and the clone's new sessions are merged back on finish. These
  *      are session .jsonl files, not the working tree, so there's no collision.
@@ -160,7 +161,8 @@ function listClones(originRepo) {
 function cloneStatus(dir) {
 	const branch = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).out || "?";
 	const st = git(dir, ["status", "--porcelain"]).out;
-	const dirty = st.split("\n").some((l) => l.trim() && l.slice(3).trim() !== MARKER);
+	const changed = st.split("\n").filter((l) => l.trim() && l.slice(3).trim() !== MARKER);
+	const dirty = changed.length > 0;
 	const up = git(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
 	let ahead = 0;
 	let behind = 0;
@@ -172,7 +174,23 @@ function cloneStatus(dir) {
 			ahead = a || 0;
 		}
 	}
-	return { branch, dirty, ahead, behind, hasUpstream: up.ok };
+	// uncommitted line changes (tracked, vs HEAD) and the last commit on this branch
+	const ss = git(dir, ["diff", "HEAD", "--shortstat"]).out;
+	const added = Number(ss.match(/(\d+) insertion/)?.[1] || 0);
+	const removed = Number(ss.match(/(\d+) deletion/)?.[1] || 0);
+	const lc = git(dir, ["log", "-1", "--format=%h\x1f%s\x1f%cr"]).out;
+	const [sha, subject, when] = lc ? lc.split("\x1f") : [];
+	const lastCommit = sha ? { sha, subject, when } : undefined;
+	return { branch, dirty, dirtyCount: changed.length, added, removed, ahead, behind, hasUpstream: up.ok, lastCommit };
+}
+
+/** Compact relative age, e.g. "2h ago". */
+function ago(date) {
+	const s = Math.max(0, (Date.now() - new Date(date).getTime()) / 1000);
+	if (s < 60) return `${Math.floor(s)}s ago`;
+	if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+	if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+	return `${Math.floor(s / 86400)}d ago`;
 }
 
 /** Best-effort PR lookup via gh; returns { state, number, url } or undefined. */
@@ -188,6 +206,14 @@ function prInfo(dir, branch) {
 
 /** True when the clone has no local-only work (clean + pushed) -> safe to remove. */
 const isSafeToClean = (s) => !s.dirty && s.hasUpstream && s.ahead === 0;
+
+/** True if the clone has committed work that lives only in the clone (not on a remote, not yet in the origin). */
+function hasUnpreservedCommits(originRepo, cloneDir, s) {
+	if (s.hasUpstream && s.ahead === 0) return false; // already on a remote
+	const head = git(cloneDir, ["rev-parse", "HEAD"]).out;
+	if (!head) return false;
+	return !git(originRepo, ["cat-file", "-e", `${head}^{commit}`]).ok;
+}
 
 // ── interactive picker (TUI-lite, arrow keys, no deps) ───────────────────────
 /** Returns the chosen index, or -1 when cancelled / non-interactive. */
@@ -468,13 +494,26 @@ async function cmdFinish(argv) {
 		}
 	}
 
+	// Decide how to preserve the clone's committed work before deleting it.
+	const s = cloneStatus(clone.dir);
+	const hasRemote = git(clone.dir, ["remote"]).out.trim().length > 0;
+
 	if (!force) {
-		const s = cloneStatus(clone.dir);
-		const problems = [];
-		if (s.dirty) problems.push("uncommitted changes");
-		if (!s.hasUpstream) problems.push("branch not pushed (no upstream)");
-		else if (s.ahead > 0) problems.push(`${s.ahead} unpushed commit(s)`);
-		if (problems.length) die(`${clone.name}: ${problems.join(", ")} — push your work, or pass --force`);
+		if (s.dirty) die(`${clone.name}: uncommitted changes — commit them, or pass --force to discard them`);
+		// With a remote, keep the "push your work" guard so PR-flow mistakes surface.
+		if (hasRemote && (!s.hasUpstream || s.ahead > 0)) {
+			die(`${clone.name}: branch not pushed — push it (or use --push / --pr), or pass --force`);
+		}
+	}
+
+	// Preserve committed work that isn't on a remote: fetch the clone's branch into the origin
+	// as a local 'kage/<name>' branch (origin's working tree is left untouched). This is what
+	// makes finish lossless without GitHub — the commits land in the origin's git, ready to merge.
+	if (hasUnpreservedCommits(originRepo, clone.dir, s)) {
+		const target = `kage/${clone.name}`;
+		const r = git(originRepo, ["fetch", clone.dir, `${s.branch}:refs/heads/${target}`]);
+		if (!r.ok) die(`failed to preserve the clone's branch into the origin: ${r.err}`);
+		info(`🌿 preserved the clone's commits in the origin as ${paint.cyan(target)}  (merge with: git merge ${target})`);
 	}
 
 	const n = mergeBack(clone.dir, originRepo);
@@ -502,7 +541,7 @@ async function cmdRm(argv) {
 
 	if (!force) {
 		const s = cloneStatus(clone.dir);
-		if (s.dirty || !s.hasUpstream || s.ahead > 0) {
+		if (s.dirty || hasUnpreservedCommits(originRepo, clone.dir, s)) {
 			die(`${clone.name} has local-only work — use 'kage finish' to keep it, or 'kage rm --force' to discard`);
 		}
 		if (!(await confirm(`Discard clone ${clone.name} without merging its memory?`))) return info("aborted");
@@ -535,30 +574,43 @@ function cmdList(argv) {
 	const clones = listClones(repoRoot);
 	if (clones.length === 0) return info("No shadow clones.");
 
-	const rows = clones.map((c) => {
-		const s = cloneStatus(c.dir);
-		return { c, s, pr: flags.pr ? prInfo(c.dir, s.branch) : undefined };
-	});
-	const nameW = Math.max(...rows.map((r) => r.c.name.length), 4);
-	const brW = Math.max(...rows.map((r) => r.s.branch.length), 6);
-
 	info(paint.bold(`Shadow clones of ${basename(repoRoot)}:`));
 	info("");
-	for (const { c, s, pr } of rows) {
-		const dirty = s.dirty ? paint.yellow("● dirty") : paint.green("clean  ");
-		let sync;
-		if (!s.hasUpstream) sync = paint.dim("not pushed");
-		else {
-			const parts = [];
-			if (s.ahead) parts.push(`↑${s.ahead}`);
-			if (s.behind) parts.push(`↓${s.behind}`);
-			sync = parts.length ? parts.join(" ") : paint.dim("in sync");
+	for (const c of clones) {
+		const s = cloneStatus(c.dir);
+		const pr = flags.pr ? prInfo(c.dir, s.branch) : undefined;
+
+		// header: status glyph · name · branch · age
+		const glyph = s.dirty ? paint.yellow("●") : isSafeToClean(s) ? paint.green("✓") : paint.cyan("·");
+		const age = c.marker?.createdAt ? paint.dim(`created ${ago(c.marker.createdAt)}`) : "";
+		info(`  ${glyph} ${paint.bold(c.name)}  ${paint.cyan(s.branch)}  ${age}`);
+
+		// detail: working-tree state · sync · PR · safe-to-clean
+		const parts = [];
+		if (s.dirty) {
+			let d = `${s.dirtyCount} changed`;
+			if (s.added || s.removed) d += ` (${paint.green(`+${s.added}`)} ${paint.red(`-${s.removed}`)})`;
+			parts.push(paint.yellow(d));
+		} else {
+			parts.push(paint.green("clean"));
 		}
-		const prStr = pr ? `  ${prState(pr)}` : "";
-		const safe = isSafeToClean(s) ? paint.green("  ✓ safe to clean") : "";
-		info(`  ${c.name.padEnd(nameW)}  ${paint.cyan(s.branch.padEnd(brW))}  ${dirty}  ${sync}${prStr}${safe}`);
+		if (!s.hasUpstream) parts.push(paint.dim("not pushed"));
+		else {
+			const sync = [];
+			if (s.ahead) sync.push(`↑${s.ahead}`);
+			if (s.behind) sync.push(`↓${s.behind}`);
+			parts.push(sync.length ? sync.join(" ") : paint.dim("in sync"));
+		}
+		if (pr) parts.push(prState(pr));
+		if (isSafeToClean(s)) parts.push(paint.green("safe to clean"));
+		info(`      ${parts.join(paint.dim("  ·  "))}`);
+
+		// last commit on the branch
+		if (s.lastCommit) {
+			info(paint.dim(`      last: ${s.lastCommit.sha} "${s.lastCommit.subject}" (${s.lastCommit.when})`));
+		}
+		info("");
 	}
-	info("");
 	info(paint.dim("  finish <name> to merge & remove · rm <name> to discard · status --pr for PR status"));
 }
 
@@ -639,8 +691,9 @@ Usage:
   kage [path] [--name <x>]                             clone repo + launch a fresh pi
                                                        (no args inside a repo with clones: interactive menu)
   kage status [--pr]                                   dashboard of clones (--pr adds PR status via gh)
-  kage finish [name] [--force] [--push] [--pr]         check -> merge memory back -> delete clone
-                                                       (--push: push first · --pr: push + open a PR via gh)
+  kage finish [name] [--force] [--push] [--pr]         preserve work -> merge memory back -> delete clone
+                                                       (--push/--pr use a remote; with no remote the branch is
+                                                        kept in the origin as a local 'kage/<name>' branch)
   kage rm [name] [--force]                             discard a clone without merging
   kage pull <path...>                                  (inside a clone) copy files back to the origin
   kage shell-init                                      shell wrapper (cd-back) + tab completion
