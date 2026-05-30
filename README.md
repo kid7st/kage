@@ -139,9 +139,10 @@ Four invariants keep parallel work safe and lossless:
 3. **Memory flows through `~/.pi`.** On create, the origin's session `.jsonl` files are copied into the
    clone (the 5 most recent, by mtime) — so `pi`'s resume picker inside the clone surfaces them if you
    want it, but the clone itself opens a **fresh** session (kage never replays turns or fakes a resumed
-   conversation). On `finish`, sessions the clone created are copied back whole; for a copied-in origin
-   session, only records the origin is missing (by id) are appended — so an unchanged copy adds nothing,
-   but turns you added by resuming it in the clone are preserved, and nothing duplicates.
+   conversation). On `finish`, sessions the clone created are copied back whole; an unchanged copied-in
+   session adds nothing; and a copied-in session you *resumed and added to* comes back as a **new,
+   self-contained session** — so the origin's original session (and the leaf pi would resume) is never
+   mutated, and your added turns aren't lost.
 4. **The origin is read-only to kage** — it only copies out and writes session memory; it never
    touches the origin's working tree, even while another session is live there.
 
@@ -153,8 +154,8 @@ Four invariants keep parallel work safe and lossless:
   your `AGENTS.md` / project conventions).
 - The clone opens a **fresh** pi session. The origin's 5 most recent sessions are copied in and are **resumable** via
   pi's resume picker. Real work belongs in the clone's own fresh session, but if you do resume a copied
-  origin session and add turns, those turns are appended back to that origin session on `finish` (merged
-  by record id, so nothing is lost or duplicated).
+  origin session and add turns, on `finish` that continuation is written back as a **separate** session
+  (the origin's original session is left untouched), so nothing is lost and no active conversation is hijacked.
 - **Upgrading from an older kage:** clones created before the copy-in/fresh-session redesign carry a
   fabricated *seed* session in their `.kage.json` (`seedFile`/`seedLeafId`). `finish` no longer special-
   cases those, so finishing such a clone would copy the replayed seed context back into the origin. For

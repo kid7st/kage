@@ -207,10 +207,16 @@ test("resuming a copied-in origin session and adding turns merges those turns ba
 		appendFileSync(join(cloneSessDir, histName), rec({ type: "message", id: "r3" }) + "\n");
 
 		run(["finish", "r1", "--force"], { cwd: repo, env });
-		const merged = readFileSync(join(originDir, histName), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
-		const ids = merged.map((e) => e.id);
-		assert.ok(ids.includes("r3"), "the appended turn should be merged back");
-		assert.equal(ids.filter((i) => i === "r1").length, 1, "existing records must not be duplicated");
+		// the origin's original session is left untouched (leaf preserved)
+		const origX = readFileSync(join(originDir, histName), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+		assert.deepEqual(origX.map((e) => e.id), ["hist", "r1", "r2"], "origin's original session must not be mutated");
+		// the resumed continuation comes back as a NEW, self-contained session file
+		const files = readdirSync(originDir).filter((f) => f.endsWith(".jsonl"));
+		assert.equal(files.length, 2, "a separate session file should be added");
+		const added = readFileSync(join(originDir, files.find((f) => f !== histName)), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+		const ids = added.map((e) => e.id);
+		assert.ok(ids.includes("r3"), "the appended turn is preserved in the new session");
+		assert.ok(ids.includes("r1"), "the new session is self-contained (keeps the copied prefix)");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
