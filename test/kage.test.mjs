@@ -86,10 +86,15 @@ test("new creates a clone, list shows it, finish removes it", () => {
 		assert.ok(existsSync(join(clone, ".kage.json")), "marker should exist");
 		assert.ok(existsSync(join(clone, "a.txt")), "files should be copied");
 
-		const list = run(["list"], { cwd: repo, env });
+		const list = run(["status"], { cwd: repo, env });
 		assert.match(list.stderr, /Shadow clones of repo/);
 		assert.match(list.stderr, /t1/);
 		assert.match(list.stderr, /not pushed/); // status dashboard column
+
+		// status also works from INSIDE the clone (resolves the origin via the marker)
+		const inside = run(["status"], { cwd: clone, env });
+		assert.match(inside.stderr, /Shadow clones of repo/);
+		assert.match(inside.stderr, /t1/);
 
 		// nothing committed/pushed in the clone -> needs --force
 		const finish = run(["finish", "t1", "--force"], { cwd: repo, env });

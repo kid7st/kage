@@ -528,8 +528,10 @@ async function cmdRm(argv) {
 
 function cmdList(argv) {
 	const { flags } = parseArgs(argv);
-	const repoRoot = repoTopLevel(process.cwd());
-	if (!repoRoot) die("not a git repository");
+	const here = repoTopLevel(process.cwd());
+	if (!here) die("not a git repository");
+	// Works from inside a clone too: resolve to the origin via the marker, then list its clones.
+	const repoRoot = readMarker(here)?.originRepo || here;
 	const clones = listClones(repoRoot);
 	if (clones.length === 0) return info("No shadow clones.");
 
