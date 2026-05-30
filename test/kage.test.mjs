@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -75,7 +75,7 @@ test("list reports no clones in a fresh repo", () => {
 	}
 });
 
-test("new --blank creates a clone, list shows it, finish removes it", () => {
+test("new creates a clone, list shows it, finish removes it", () => {
 	const root = tmp();
 	const repo = join(root, "repo");
 	mkdirSync(repo);
@@ -83,16 +83,21 @@ test("new --blank creates a clone, list shows it, finish removes it", () => {
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
 	const clone = join(root, "repo--t1");
 	try {
-		const r = run(["--blank", "--name", "t1"], { cwd: repo, env });
+		const r = run(["--name", "t1"], { cwd: repo, env });
 		assert.equal(r.status, 0);
 		assert.ok(existsSync(clone), "clone dir should exist");
 		assert.ok(existsSync(join(clone, ".kage.json")), "marker should exist");
 		assert.ok(existsSync(join(clone, "a.txt")), "files should be copied");
 
-		const list = run(["list"], { cwd: repo, env });
+		const list = run(["status"], { cwd: repo, env });
 		assert.match(list.stderr, /Shadow clones of repo/);
 		assert.match(list.stderr, /t1/);
 		assert.match(list.stderr, /not pushed/); // status dashboard column
+
+		// status also works from INSIDE the clone (resolves the origin via the marker)
+		const inside = run(["status"], { cwd: clone, env });
+		assert.match(inside.stderr, /Shadow clones of repo/);
+		assert.match(inside.stderr, /t1/);
 
 		// nothing committed/pushed in the clone -> needs --force
 		const finish = run(["finish", "t1", "--force"], { cwd: repo, env });
@@ -110,26 +115,37 @@ test("shell-init prints a cd wrapper and completion", () => {
 	assert.match(r.stdout, /compdef _kage kage|complete -F _kage kage/);
 });
 
-test("a blank clone gets an in-context kage reminder", () => {
+test("origin history is copied into the clone, and new clone work merges back without duplicating it", () => {
 	const root = tmp();
 	const repo = join(root, "repo");
 	mkdirSync(repo);
 	initRepo(repo);
 	const sessions = join(root, "sessions");
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: sessions };
+
+	// seed the origin's session dir with one history file (encoded by the real toplevel path)
+	const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+	const enc = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
+	const originDir = join(sessions, enc(top));
+	mkdirSync(originDir, { recursive: true });
+	const histName = "2026-01-01T00-00-00-000Z_aaaaaaaa-0000-0000-0000-000000000000.jsonl";
+	writeFileSync(join(originDir, histName), JSON.stringify({ type: "session", version: 3, id: "hist", cwd: top }) + "\n");
+
 	const clone = join(root, "repo--h1");
 	try {
-		run(["--blank", "--name", "h1"], { cwd: repo, env });
-		const encName = readdirSync(sessions).find((d) => d.endsWith("repo--h1--"));
-		assert.ok(encName, "clone session dir should exist");
-		const dir = join(sessions, encName);
-		const file = join(dir, readdirSync(dir)[0]);
-		const lines = readFileSync(file, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-		const last = lines[lines.length - 1];
-		assert.equal(last.type, "custom_message");
-		assert.equal(last.customType, "kage");
-		assert.match(last.content, /shadow clone/);
-		assert.match(last.content, /feature branch/);
+		run(["--name", "h1"], { cwd: repo, env });
+		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--h1--")));
+		// the origin's history is copied into the clone (resumable there)
+		assert.ok(existsSync(join(cloneSessDir, histName)), "origin history should be copied into the clone");
+
+		// simulate new clone work: a brand-new session file the clone created
+		const newName = "2026-02-02T00-00-00-000Z_bbbbbbbb-0000-0000-0000-000000000000.jsonl";
+		writeFileSync(join(cloneSessDir, newName), JSON.stringify({ type: "session", version: 3, id: "new", cwd: clone }) + "\n");
+
+		run(["finish", "h1", "--force"], { cwd: repo, env });
+		const originFiles = readdirSync(originDir);
+		assert.ok(originFiles.includes(histName), "origin keeps its original history file");
+		assert.ok(originFiles.includes(newName), "clone's new session merges back into the origin");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -149,7 +165,7 @@ test("finish --push pushes the branch then finishes", () => {
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
 	const clone = join(root, "repo--p1");
 	try {
-		run(["--blank", "--name", "p1"], { cwd: repo, env });
+		run(["--name", "p1"], { cwd: repo, env });
 		// make a committed-but-unpushed change in the clone on a new branch
 		spawnSync("git", ["switch", "-qc", "feat"], { cwd: clone });
 		writeFileSync(join(clone, "b.txt"), "x\n");
@@ -167,6 +183,105 @@ test("finish --push pushes the branch then finishes", () => {
 	}
 });
 
+test("resuming a copied-in origin session and adding turns merges those turns back (not dropped)", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const sessions = join(root, "sessions");
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: sessions };
+
+	const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).stdout.trim();
+	const enc = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
+	const originDir = join(sessions, enc(top));
+	mkdirSync(originDir, { recursive: true });
+	const histName = "2026-01-01T00-00-00-000Z_cccccccc-0000-0000-0000-000000000000.jsonl";
+	const rec = (o) => JSON.stringify(o);
+	writeFileSync(
+		join(originDir, histName),
+		[rec({ type: "session", version: 3, id: "hist", cwd: top }), rec({ type: "message", id: "r1" }), rec({ type: "message", id: "r2" })].join("\n") + "\n",
+	);
+
+	const clone = join(root, "repo--r1");
+	try {
+		run(["--name", "r1"], { cwd: repo, env });
+		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--r1--")));
+		// simulate resuming the copied origin session in the clone and adding a new turn
+		appendFileSync(join(cloneSessDir, histName), rec({ type: "message", id: "r3" }) + "\n");
+
+		run(["finish", "r1", "--force"], { cwd: repo, env });
+		// the origin's original session is left untouched (leaf preserved)
+		const origX = readFileSync(join(originDir, histName), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+		assert.deepEqual(origX.map((e) => e.id), ["hist", "r1", "r2"], "origin's original session must not be mutated");
+		// the resumed continuation comes back as a NEW, self-contained session file
+		const files = readdirSync(originDir).filter((f) => f.endsWith(".jsonl"));
+		assert.equal(files.length, 2, "a separate session file should be added");
+		const added = readFileSync(join(originDir, files.find((f) => f !== histName)), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+		const ids = added.map((e) => e.id);
+		assert.ok(ids.includes("r3"), "the appended turn is preserved in the new session");
+		assert.ok(ids.includes("r1"), "the new session is self-contained (keeps the copied prefix)");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("finish with no remote preserves the clone's commits into the origin as kage/<name>", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo); // a plain repo with NO remote
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--local");
+	try {
+		run(["--name", "local"], { cwd: repo, env });
+		// commit work in the clone (still on the base branch, no remote to push to)
+		writeFileSync(join(clone, "b.txt"), "x\n");
+		spawnSync("git", ["add", "."], { cwd: clone });
+		spawnSync("git", ["commit", "-qm", "local work"], { cwd: clone });
+		const cloneHead = spawnSync("git", ["rev-parse", "HEAD"], { cwd: clone, encoding: "utf8" }).stdout.trim();
+
+		// finish without --force should succeed (no remote -> preserve locally, not refuse)
+		const r = run(["finish", "local"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.ok(!existsSync(clone), "clone removed");
+
+		// the commits now live in the origin under refs/heads/kage/<name>-<sha7>
+		const ref = spawnSync("git", ["rev-parse", `kage/local-${cloneHead.slice(0, 7)}`], { cwd: repo, encoding: "utf8" });
+		assert.equal(ref.stdout.trim(), cloneHead, "origin has the preserved branch pointing at the clone's commit");
+		// origin's working tree was left untouched (no b.txt checked out)
+		assert.ok(!existsSync(join(repo, "b.txt")), "origin working tree untouched");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("clone names are sanitized to a git-ref-safe slug (folder + no-remote preservation ref)", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo); // no remote
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--foo-bar"); // "foo bar" -> slug "foo-bar"
+	try {
+		const r = run(["--name", "foo bar"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.ok(existsSync(clone), "folder suffix should be the slug 'foo-bar'");
+
+		writeFileSync(join(clone, "b.txt"), "x\n");
+		spawnSync("git", ["add", "."], { cwd: clone });
+		spawnSync("git", ["commit", "-qm", "work"], { cwd: clone });
+		const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: clone, encoding: "utf8" }).stdout.trim();
+
+		const fin = run(["finish", "foo-bar", "--force"], { cwd: repo, env });
+		assert.equal(fin.status, 0, fin.stderr); // must not abort on an invalid ref
+		assert.ok(!existsSync(clone), "clone removed");
+		const ref = spawnSync("git", ["rev-parse", `kage/foo-bar-${head.slice(0, 7)}`], { cwd: repo, encoding: "utf8" });
+		assert.equal(ref.stdout.trim(), head, "preserved under a valid ref-safe branch name");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("rm discards a clone (with --force)", () => {
 	const root = tmp();
 	const repo = join(root, "repo");
@@ -175,9 +290,13 @@ test("rm discards a clone (with --force)", () => {
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
 	const clone = join(root, "repo--gone");
 	try {
-		run(["--blank", "--name", "gone"], { cwd: repo, env });
+		run(["--name", "gone"], { cwd: repo, env });
 		assert.ok(existsSync(clone));
-		// without --force and non-interactive: refuses (local-only work / can't confirm)
+		// give the clone local-only committed work
+		writeFileSync(join(clone, "b.txt"), "x\n");
+		spawnSync("git", ["add", "."], { cwd: clone });
+		spawnSync("git", ["commit", "-qm", "work"], { cwd: clone });
+		// without --force: refuses (local-only work would be discarded without merging)
 		const refused = run(["rm", "gone"], { cwd: repo, env });
 		assert.notEqual(refused.status, 0);
 		assert.ok(existsSync(clone), "clone should still exist after refused rm");
