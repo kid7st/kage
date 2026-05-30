@@ -1,6 +1,6 @@
 {
   "name": "pi-kage",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "🥷 Shadow Clone Jutsu for your git repo: copy it into an isolated folder, work in parallel with pi, then merge the session memory back",
   "keywords": [
     "pi",
