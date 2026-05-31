@@ -28,8 +28,8 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import readline from "node:readline";
 import type { Key } from "node:readline";
+import readline from "node:readline";
 
 const VERSION = "0.3.5"; // keep in sync with package.json (enforced by test)
 const MARKER = ".kage.json";
@@ -326,7 +326,9 @@ function select(title: string, labels: string[]): Promise<number> {
 		process.stdin.resume();
 		out.write(`${title}\n`);
 		const draw = () =>
-			labels.forEach((l, i) => out.write(`\x1b[2K${i === idx ? paint.cyan("❯ ") : "  "}${l}\n`));
+			labels.forEach((l, i) => {
+				out.write(`\x1b[2K${i === idx ? paint.cyan("❯ ") : "  "}${l}\n`);
+			});
 		draw();
 		const done = (r: number) => {
 			process.stdin.removeListener("keypress", onKey);
@@ -352,7 +354,10 @@ async function ask(prompt: string, prefill?: string): Promise<string> {
 	if (!process.stdin.isTTY) return "";
 	const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
 	const a = await new Promise<string>((r) => {
-		rl.question(prompt, (x) => (rl.close(), r(x)));
+		rl.question(prompt, (x) => {
+			rl.close();
+			r(x);
+		});
 		if (prefill) rl.write(prefill); // pre-fill an editable default: Enter accepts, or edit it
 	});
 	return a.trim();
@@ -446,7 +451,9 @@ function mergeBack(cloneDir: string, originRepo: string): number {
 	let n = 0;
 	for (const f of readdirSync(srcDir)) {
 		if (!f.endsWith(".jsonl")) continue;
-		const src = readFileSync(join(srcDir, f), "utf8").split("\n").filter((l) => l.trim());
+		const src = readFileSync(join(srcDir, f), "utf8")
+			.split("\n")
+			.filter((l) => l.trim());
 		if (src.length === 0) continue;
 		const dest = join(destDir, f);
 
@@ -458,7 +465,7 @@ function mergeBack(cloneDir: string, originRepo: string): number {
 				continue;
 			}
 			header.cwd = originRepo;
-			writeFileSync(dest, [JSON.stringify(header), ...src.slice(1)].join("\n") + "\n");
+			writeFileSync(dest, `${[JSON.stringify(header), ...src.slice(1)].join("\n")}\n`);
 			n++;
 			continue;
 		}
@@ -491,7 +498,7 @@ function mergeBack(cloneDir: string, originRepo: string): number {
 		}
 		const id = randomUUID();
 		const fname = `${new Date().toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`;
-		writeFileSync(join(destDir, fname), [JSON.stringify({ ...header, id, cwd: originRepo }), ...src.slice(1)].join("\n") + "\n");
+		writeFileSync(join(destDir, fname), `${[JSON.stringify({ ...header, id, cwd: originRepo }), ...src.slice(1)].join("\n")}\n`);
 		n++;
 	}
 	try {
@@ -555,12 +562,7 @@ async function cmdNew(argv: string[]): Promise<void> {
 			if (idx > 0) {
 				const clone = clones[idx - 1];
 				if (!clone) return info("cancelled");
-				const act = await select(`${clone.name}:`, [
-					"Enter (resume pi)",
-					"Finish (merge memory & remove)",
-					"Remove (discard)",
-					"Cancel",
-				]);
+				const act = await select(`${clone.name}:`, ["Enter (resume pi)", "Finish (merge memory & remove)", "Remove (discard)", "Cancel"]);
 				if (act === 0) return launchPi(clone.dir, ["-c"]);
 				if (act === 1) return cmdFinish([clone.name]);
 				if (act === 2) return cmdRm([clone.name]);
@@ -724,7 +726,10 @@ function cmdList(argv: string[]): void {
 	// Works from inside a clone too: resolve to the origin via the marker, then list its clones.
 	const repoRoot = readMarker(here)?.originRepo || here;
 	const clones = listClones(repoRoot);
-	if (clones.length === 0) return info("No shadow clones.");
+	if (clones.length === 0) {
+		info("No shadow clones.");
+		return;
+	}
 
 	info(paint.bold(`Shadow clones of ${basename(repoRoot)}:`));
 	info("");
@@ -898,7 +903,7 @@ async function main(): Promise<void> {
 			return cmdPull(rest);
 		case "shell-init":
 		case "completion": {
-			process.stdout.write(SHELL_INIT + "\n");
+			process.stdout.write(`${SHELL_INIT}\n`);
 			// When a human runs this directly (stdout is a TTY, not captured by `$(...)`),
 			// the script just scrolled past unused — show how to actually activate it.
 			// During `eval "$(kage shell-init)"` stdout is a pipe, so this stays silent.

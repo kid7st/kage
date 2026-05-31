@@ -178,9 +178,13 @@ The CLI and its tests are written in TypeScript and compiled with `tsc`:
 `bin/` and `dist/` are build artifacts — both gitignored. `bin/` is produced on `npm install`
 (via `prepare`), so `npm link` from a clone just works.
 
+Linting/formatting is handled by [Biome](https://biomejs.dev) — a dev-only dependency that never
+ships in the package, so the zero-runtime-dependency artifact is unaffected.
+
 ```bash
 npm run build    # tsc: src/kage.mts -> bin/kage.mjs
-npm run lint     # tsc --noEmit type check (src + test)
+npm run format   # biome: auto-format + safe lint fixes
+npm run lint     # biome (lint + format check) + tsc type check (src + test)
 npm test         # build CLI + tests, then run node:test smoke tests (temp repos, no network)
 ```
 
