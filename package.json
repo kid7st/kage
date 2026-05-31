@@ -36,8 +36,16 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "test": "node --test",
-    "lint": "node --check bin/kage.mjs",
+    "build": "tsc && chmod +x bin/kage.mjs",
+    "build:test": "tsc -p tsconfig.test.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "lint": "npm run typecheck",
+    "test": "npm run build && npm run build:test && node --test dist/kage.test.mjs",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
   }
 }

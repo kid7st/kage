@@ -2,5 +2,9 @@ node_modules/
 *.log
 .DS_Store
 
+# build output (compiled from TypeScript; not committed)
+/bin/
+/dist/
+
 # kage clone marker
 .kage.json

@@ -1,21 +1,28 @@
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { appendFileSync, existsSync, mkdtempSync, writeFileSync, chmodSync, mkdirSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
+// Resolved from the compiled test (dist/kage.test.mjs), so "../bin" and "../package.json"
+// point at the project root — the build emits tests to dist/ for exactly this reason.
 const CLI = new URL("../bin/kage.mjs", import.meta.url).pathname;
 
-function run(args, opts = {}) {
+interface RunOpts {
+	cwd?: string;
+	env?: NodeJS.ProcessEnv;
+}
+
+function run(args: string[], opts: RunOpts = {}): SpawnSyncReturns<string> {
 	return spawnSync("node", [CLI, ...args], { encoding: "utf8", ...opts });
 }
 
-function tmp() {
+function tmp(): string {
 	return mkdtempSync(join(tmpdir(), "kage-test-"));
 }
 
-function initRepo(dir) {
+function initRepo(dir: string): void {
 	spawnSync("git", ["init", "-q"], { cwd: dir });
 	spawnSync("git", ["config", "user.email", "t@t.co"], { cwd: dir });
 	spawnSync("git", ["config", "user.name", "t"], { cwd: dir });
@@ -25,7 +32,7 @@ function initRepo(dir) {
 }
 
 /** A PATH containing a fake `pi` that exits immediately, so `kage new` can run headless. */
-function fakePiPath(root) {
+function fakePiPath(root: string): string {
 	const bin = join(root, "bin");
 	mkdirSync(bin, { recursive: true });
 	const pi = join(bin, "pi");
@@ -33,6 +40,8 @@ function fakePiPath(root) {
 	chmodSync(pi, 0o755);
 	return `${bin}:${process.env.PATH}`;
 }
+
+const enc = (abs: string): string => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
 
 test("--help prints usage", () => {
 	const r = run(["--help"]);
@@ -125,7 +134,6 @@ test("origin history is copied into the clone, and new clone work merges back wi
 
 	// seed the origin's session dir with one history file (encoded by the real toplevel path)
 	const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).stdout.trim();
-	const enc = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
 	const originDir = join(sessions, enc(top));
 	mkdirSync(originDir, { recursive: true });
 	const histName = "2026-01-01T00-00-00-000Z_aaaaaaaa-0000-0000-0000-000000000000.jsonl";
@@ -134,7 +142,7 @@ test("origin history is copied into the clone, and new clone work merges back wi
 	const clone = join(root, "repo--h1");
 	try {
 		run(["--name", "h1"], { cwd: repo, env });
-		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--h1--")));
+		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--h1--"))!);
 		// the origin's history is copied into the clone (resumable there)
 		assert.ok(existsSync(join(cloneSessDir, histName)), "origin history should be copied into the clone");
 
@@ -192,11 +200,10 @@ test("resuming a copied-in origin session and adding turns merges those turns ba
 	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: sessions };
 
 	const top = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: repo, encoding: "utf8" }).stdout.trim();
-	const enc = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
 	const originDir = join(sessions, enc(top));
 	mkdirSync(originDir, { recursive: true });
 	const histName = "2026-01-01T00-00-00-000Z_cccccccc-0000-0000-0000-000000000000.jsonl";
-	const rec = (o) => JSON.stringify(o);
+	const rec = (o: unknown): string => JSON.stringify(o);
 	writeFileSync(
 		join(originDir, histName),
 		[rec({ type: "session", version: 3, id: "hist", cwd: top }), rec({ type: "message", id: "r1" }), rec({ type: "message", id: "r2" })].join("\n") + "\n",
@@ -205,7 +212,7 @@ test("resuming a copied-in origin session and adding turns merges those turns ba
 	const clone = join(root, "repo--r1");
 	try {
 		run(["--name", "r1"], { cwd: repo, env });
-		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--r1--")));
+		const cloneSessDir = join(sessions, readdirSync(sessions).find((d) => d.endsWith("repo--r1--"))!);
 		// simulate resuming the copied origin session in the clone and adding a new turn
 		appendFileSync(join(cloneSessDir, histName), rec({ type: "message", id: "r3" }) + "\n");
 
@@ -216,7 +223,7 @@ test("resuming a copied-in origin session and adding turns merges those turns ba
 		// the resumed continuation comes back as a NEW, self-contained session file
 		const files = readdirSync(originDir).filter((f) => f.endsWith(".jsonl"));
 		assert.equal(files.length, 2, "a separate session file should be added");
-		const added = readFileSync(join(originDir, files.find((f) => f !== histName)), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+		const added = readFileSync(join(originDir, files.find((f) => f !== histName)!), "utf8").split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
 		const ids = added.map((e) => e.id);
 		assert.ok(ids.includes("r3"), "the appended turn is preserved in the new session");
 		assert.ok(ids.includes("r1"), "the new session is self-contained (keeps the copied prefix)");
