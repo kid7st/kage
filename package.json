@@ -36,8 +36,18 @@
     "registry": "https://registry.npmjs.org/"
   },
   "scripts": {
-    "test": "node --test",
-    "lint": "node --check bin/kage.mjs",
+    "build": "tsc && chmod +x bin/kage.mjs",
+    "build:test": "tsc -p tsconfig.test.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "format": "biome check --write .",
+    "lint": "biome check . && npm run typecheck",
+    "test": "npm run build && npm run build:test && node --test dist/*.test.mjs",
+    "prepare": "npm run build",
     "prepublishOnly": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.16",
+    "@types/node": "^18.19.0",
+    "typescript": "^5.7.3"
   }
 }

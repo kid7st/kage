@@ -28,6 +28,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
+import type { Key } from "node:readline";
 import readline from "node:readline";
 
 const VERSION = "0.3.5"; // keep in sync with package.json (enforced by test)
@@ -35,53 +36,119 @@ const MARKER = ".kage.json";
 const SESSIONS = process.env.KAGE_SESSIONS_DIR || join(homedir(), ".pi", "agent", "sessions");
 const RECENT_SESSIONS = 5; // how many of the origin's most-recent sessions to copy into a clone
 
+// ── types ────────────────────────────────────────────────────────────────────
+interface Marker {
+	originRepo: string;
+	// Written by kage on create, but read defensively (old/hand-edited markers may omit them).
+	name?: string;
+	createdAt?: string;
+}
+interface Clone {
+	dir: string;
+	name: string;
+	marker: Marker;
+}
+interface ShResult {
+	ok: boolean;
+	out: string;
+	err: string;
+}
+interface LastCommit {
+	sha: string;
+	subject: string;
+	when: string;
+}
+interface CloneStatus {
+	branch: string;
+	dirty: boolean;
+	dirtyCount: number;
+	added: number;
+	removed: number;
+	ahead: number;
+	behind: number;
+	hasUpstream: boolean;
+	lastCommit?: LastCommit;
+}
+interface Pr {
+	state: string;
+	number: number;
+	url: string;
+}
+type Flags = Record<string, string | boolean>;
+interface ParsedArgs {
+	positional: string[];
+	flags: Flags;
+}
+/** A string colorizer — paint.* and the PR color map share this shape. */
+type Paint = (s: string) => string;
+/** Typed accessors for the loose flags bag, so consumers don't re-derive the shape inline. */
+const boolFlag = (flags: Flags, name: string): boolean => Boolean(flags[name]);
+const strFlag = (flags: Flags, name: string): string | undefined => {
+	const v = flags[name];
+	return typeof v === "string" ? v : undefined;
+};
+/** A pi session .jsonl header record (first line); kept loose since we only touch a few fields. */
+interface SessionHeader {
+	id?: string;
+	cwd?: string;
+	[key: string]: unknown;
+}
+
 // ── output helpers ───────────────────────────────────────────────────────────
 const TTY = process.stderr.isTTY;
-const col = (code, s) => (TTY ? `\x1b[${code}m${s}\x1b[0m` : s);
+const col = (code: string, s: string): string => (TTY ? `\x1b[${code}m${s}\x1b[0m` : s);
 const paint = {
-	bold: (s) => col("1", s),
-	dim: (s) => col("90", s),
-	red: (s) => col("31", s),
-	green: (s) => col("32", s),
-	yellow: (s) => col("33", s),
-	blue: (s) => col("34", s),
-	magenta: (s) => col("35", s),
-	cyan: (s) => col("36", s),
+	bold: (s: string) => col("1", s),
+	dim: (s: string) => col("90", s),
+	red: (s: string) => col("31", s),
+	green: (s: string) => col("32", s),
+	yellow: (s: string) => col("33", s),
+	magenta: (s: string) => col("35", s),
+	cyan: (s: string) => col("36", s),
 };
-const info = (msg) => console.error(msg);
-const die = (msg) => {
+const info = (msg: string): void => console.error(msg);
+// A function declaration (not an arrow const) so its `never` return type drives
+// TypeScript's control-flow narrowing at call sites (`if (!x) die(...)` -> x is defined).
+function die(msg: string): never {
 	console.error(`✗ ${msg}`);
 	process.exit(1);
-};
+}
 
 // ── shell / git helpers ──────────────────────────────────────────────────────
-function sh(cmd, args, opts = {}) {
+function sh(cmd: string, args: string[], opts: { cwd?: string } = {}): ShResult {
+	// `encoding: "utf8"` selects spawnSync's string overload, so stdout/stderr are typed strings.
 	const r = spawnSync(cmd, args, { encoding: "utf8", ...opts });
-	return { ok: r.status === 0, out: (r.stdout || "").trim(), err: (r.stderr || "").trim(), code: r.status };
+	return { ok: r.status === 0, out: (r.stdout || "").trim(), err: (r.stderr || "").trim() };
 }
-const git = (cwd, args) => sh("git", args, { cwd });
+const git = (cwd: string, args: string[]): ShResult => sh("git", args, { cwd });
 
 /** Absolute path -> pi's session dir name: /a/b -> --a-b-- */
-const encodeCwd = (abs) => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
-const sessionDirFor = (repoAbs) => join(SESSIONS, encodeCwd(repoAbs));
+const encodeCwd = (abs: string): string => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
+const sessionDirFor = (repoAbs: string): string => join(SESSIONS, encodeCwd(repoAbs));
 
-function repoTopLevel(cwd) {
+function repoTopLevel(cwd: string): string | undefined {
 	const r = git(cwd, ["rev-parse", "--show-toplevel"]);
 	return r.ok ? r.out : undefined;
 }
 
-function readMarker(dir) {
+/** Validate parsed JSON is a kage marker (only originRepo is required; name/createdAt are best-effort). */
+function isMarker(v: unknown): v is Marker {
+	return typeof v === "object" && v !== null && typeof (v as Record<string, unknown>).originRepo === "string";
+}
+
+function readMarker(dir: string): Marker | undefined {
 	const p = join(dir, MARKER);
 	if (!existsSync(p)) return undefined;
 	try {
-		return JSON.parse(readFileSync(p, "utf8"));
+		const parsed: unknown = JSON.parse(readFileSync(p, "utf8"));
+		return isMarker(parsed) ? parsed : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
 /** Copy a whole directory: clonefile on macOS, reflink on Linux, plain copy as fallback. */
-function copyTree(src, dst) {
+function copyTree(src: string, dst: string): ShResult {
 	const isMac = process.platform === "darwin";
 	let r = sh("cp", isMac ? ["-c", "-R", src, dst] : ["--reflink=auto", "-R", src, dst]);
 	if (!r.ok) r = sh("cp", ["-R", src, dst]);
@@ -89,14 +156,15 @@ function copyTree(src, dst) {
 }
 
 /** An indeterminate spinner on stderr (no-op when not a TTY). Returns { stop() }. */
-function spinner(label) {
+function spinner(label: string): { stop(): void } {
 	if (!process.stderr.isTTY) return { stop() {} };
 	const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 	const t0 = Date.now();
 	let i = 0;
 	const tick = () => {
 		const s = ((Date.now() - t0) / 1000).toFixed(1);
-		process.stderr.write(`\r\x1b[2K${paint.cyan(frames[(i = (i + 1) % frames.length)])} ${label} ${paint.dim(`${s}s`)}`);
+		i = (i + 1) % frames.length;
+		process.stderr.write(`\r\x1b[2K${paint.cyan(frames[i] ?? "")} ${label} ${paint.dim(`${s}s`)}`);
 	};
 	tick();
 	const id = setInterval(tick, 80);
@@ -109,14 +177,14 @@ function spinner(label) {
 }
 
 /** Copy the repo with a spinner (the copy can be slow on non-reflink filesystems). */
-async function copyRepo(src, dst) {
+async function copyRepo(src: string, dst: string): Promise<{ ok: boolean; err: string }> {
 	const isMac = process.platform === "darwin";
 	const primary = isMac ? ["-c", "-R", src, dst] : ["--reflink=auto", "-R", src, dst];
-	const tryCp = (args) =>
-		new Promise((res) => {
+	const tryCp = (args: string[]) =>
+		new Promise<{ ok: boolean; err: string }>((res) => {
 			const p = spawn("cp", args, { stdio: ["ignore", "ignore", "pipe"] });
 			let err = "";
-			p.stderr.on("data", (d) => (err += d));
+			p.stderr?.on("data", (d) => (err += d));
 			p.on("error", (e) => res({ ok: false, err: e.message }));
 			p.on("close", (code) => res({ ok: code === 0, err: err.trim() }));
 		});
@@ -127,9 +195,9 @@ async function copyRepo(src, dst) {
 	return r;
 }
 
-function tsName() {
+function tsName(): string {
 	const d = new Date();
-	const p = (n) => String(n).padStart(2, "0");
+	const p = (n: number) => String(n).padStart(2, "0");
 	return `kage-${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
@@ -138,7 +206,7 @@ function tsName() {
  * ref-illegal chars (spaces, /, ~^:?*[\\, etc.) -> '-', no '..', no leading/trailing '-'/'.',
  * no trailing '.lock'. Falls back to a timestamp name if it sanitizes to empty.
  */
-function slug(name) {
+function slug(name: string): string {
 	const s = name
 		.replace(/[^A-Za-z0-9._-]+/g, "-")
 		.replace(/\.{2,}/g, ".")
@@ -148,25 +216,29 @@ function slug(name) {
 	return s || tsName();
 }
 
-function parseArgs(argv) {
-	const positional = [];
-	const flags = {};
+function parseArgs(argv: string[]): ParsedArgs {
+	const positional: string[] = [];
+	const flags: Flags = {};
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
+		if (a === undefined) continue; // unreachable (bounded loop), but proves index safety to the checker
 		if (a.startsWith("--")) {
 			const eq = a.indexOf("=");
+			const next = argv[i + 1];
 			if (eq >= 0) flags[a.slice(2, eq)] = a.slice(eq + 1);
-			else if (i + 1 < argv.length && !argv[i + 1].startsWith("--")) flags[a.slice(2)] = argv[++i];
-			else flags[a.slice(2)] = true;
+			else if (next !== undefined && !next.startsWith("--")) {
+				flags[a.slice(2)] = next;
+				i++;
+			} else flags[a.slice(2)] = true;
 		} else positional.push(a);
 	}
 	return { positional, flags };
 }
 
 // ── clone discovery & status ─────────────────────────────────────────────────
-function listClones(originRepo) {
+function listClones(originRepo: string): Clone[] {
 	const parent = dirname(originRepo);
-	const out = [];
+	const out: Clone[] = [];
 	for (const name of readdirSync(parent)) {
 		const dir = join(parent, name);
 		const m = readMarker(dir);
@@ -175,7 +247,7 @@ function listClones(originRepo) {
 	return out;
 }
 
-function cloneStatus(dir) {
+function cloneStatus(dir: string): CloneStatus {
 	const branch = git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).out || "?";
 	const st = git(dir, ["status", "--porcelain"]).out;
 	const changed = st.split("\n").filter((l) => l.trim() && l.slice(3).trim() !== MARKER);
@@ -196,13 +268,13 @@ function cloneStatus(dir) {
 	const added = Number(ss.match(/(\d+) insertion/)?.[1] || 0);
 	const removed = Number(ss.match(/(\d+) deletion/)?.[1] || 0);
 	const lc = git(dir, ["log", "-1", "--format=%h\x1f%s\x1f%cr"]).out;
-	const [sha, subject, when] = lc ? lc.split("\x1f") : [];
-	const lastCommit = sha ? { sha, subject, when } : undefined;
+	const [sha = "", subject = "", when = ""] = lc ? lc.split("\x1f") : [];
+	const lastCommit: LastCommit | undefined = sha ? { sha, subject, when } : undefined;
 	return { branch, dirty, dirtyCount: changed.length, added, removed, ahead, behind, hasUpstream: up.ok, lastCommit };
 }
 
 /** Compact relative age, e.g. "2h ago". */
-function ago(date) {
+function ago(date: string): string {
 	const s = Math.max(0, (Date.now() - new Date(date).getTime()) / 1000);
 	if (s < 60) return `${Math.floor(s)}s ago`;
 	if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -211,21 +283,29 @@ function ago(date) {
 }
 
 /** Best-effort PR lookup via gh; returns { state, number, url } or undefined. */
-function prInfo(dir, branch) {
+/** Validate `gh pr view --json` output has the fields we read. */
+function isPr(v: unknown): v is Pr {
+	if (typeof v !== "object" || v === null) return false;
+	const p = v as Record<string, unknown>;
+	return typeof p.state === "string" && typeof p.number === "number" && typeof p.url === "string";
+}
+
+function prInfo(dir: string, branch: string): Pr | undefined {
 	const r = sh("gh", ["pr", "view", branch, "--json", "state,number,url"], { cwd: dir });
 	if (!r.ok) return undefined;
 	try {
-		return JSON.parse(r.out);
+		const parsed: unknown = JSON.parse(r.out);
+		return isPr(parsed) ? parsed : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
 /** True when the clone has no local-only work (clean + pushed) -> safe to remove. */
-const isSafeToClean = (s) => !s.dirty && s.hasUpstream && s.ahead === 0;
+const isSafeToClean = (s: CloneStatus): boolean => !s.dirty && s.hasUpstream && s.ahead === 0;
 
 /** True if the clone has committed work that lives only in the clone (not on a remote, not yet in the origin). */
-function hasUnpreservedCommits(originRepo, cloneDir, s) {
+function hasUnpreservedCommits(originRepo: string, cloneDir: string, s: CloneStatus): boolean {
 	if (s.hasUpstream && s.ahead === 0) return false; // already on a remote
 	const head = git(cloneDir, ["rev-parse", "HEAD"]).out;
 	if (!head) return false;
@@ -234,9 +314,10 @@ function hasUnpreservedCommits(originRepo, cloneDir, s) {
 
 // ── interactive picker (TUI-lite, arrow keys, no deps) ───────────────────────
 /** Returns the chosen index, or -1 when cancelled / non-interactive. */
-function select(title, labels) {
-	return new Promise((resolve) => {
-		if (!process.stdin.isTTY || labels.length === 0) return resolve(-1);
+function select(title: string, labels: string[]): Promise<number> {
+	// `settle` (not `resolve`) avoids shadowing the imported path.resolve.
+	return new Promise((settle) => {
+		if (!process.stdin.isTTY || labels.length === 0) return settle(-1);
 		let idx = 0;
 		const n = labels.length;
 		const out = process.stderr;
@@ -245,16 +326,18 @@ function select(title, labels) {
 		process.stdin.resume();
 		out.write(`${title}\n`);
 		const draw = () =>
-			labels.forEach((l, i) => out.write(`\x1b[2K${i === idx ? paint.cyan("❯ ") : "  "}${l}\n`));
+			labels.forEach((l, i) => {
+				out.write(`\x1b[2K${i === idx ? paint.cyan("❯ ") : "  "}${l}\n`);
+			});
 		draw();
-		const done = (r) => {
+		const done = (r: number) => {
 			process.stdin.removeListener("keypress", onKey);
 			process.stdin.setRawMode(false);
 			process.stdin.pause();
 			out.write("\n");
-			resolve(r);
+			settle(r);
 		};
-		const onKey = (str, key) => {
+		const onKey = (str: string | undefined, key: Key) => {
 			if (key.name === "up" || str === "k") idx = (idx - 1 + n) % n;
 			else if (key.name === "down" || str === "j") idx = (idx + 1) % n;
 			else if (key.name === "return") return done(idx);
@@ -267,26 +350,29 @@ function select(title, labels) {
 	});
 }
 
-async function ask(prompt, prefill) {
+async function ask(prompt: string, prefill?: string): Promise<string> {
 	if (!process.stdin.isTTY) return "";
 	const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
-	const a = await new Promise((r) => {
-		rl.question(prompt, (x) => (rl.close(), r(x)));
+	const a = await new Promise<string>((r) => {
+		rl.question(prompt, (x) => {
+			rl.close();
+			r(x);
+		});
 		if (prefill) rl.write(prefill); // pre-fill an editable default: Enter accepts, or edit it
 	});
 	return a.trim();
 }
 
-async function confirm(msg) {
+async function confirm(msg: string): Promise<boolean> {
 	if (!process.stdin.isTTY) return false;
 	return /^y(es)?$/i.test(await ask(`${msg} [y/N] `));
 }
 
 /** Resolve which clone to act on: inside a clone, by name, only-one, or interactive pick. */
-async function pickClone(action, name) {
+async function pickClone(action: string, name?: string): Promise<{ originRepo: string; clone: Clone } | null> {
 	const here = repoTopLevel(process.cwd());
-	const hm = here && readMarker(here);
-	if (hm && !name) return { originRepo: hm.originRepo, clone: { dir: here, name: hm.name || basename(here), marker: hm } };
+	const hm = here ? readMarker(here) : undefined;
+	if (here && hm && !name) return { originRepo: hm.originRepo, clone: { dir: here, name: hm.name || basename(here), marker: hm } };
 	// If `name` resolves to a clone directory, use its marker directly — works from anywhere,
 	// even outside a repo (e.g. `kage rm ../app--fix` from the parent dir).
 	if (name) {
@@ -303,13 +389,15 @@ async function pickClone(action, name) {
 		if (!c) die(`no clone named ${name}`);
 		return { originRepo, clone: c };
 	}
-	if (clones.length === 1) return { originRepo, clone: clones[0] };
+	const first = clones[0];
+	if (first && clones.length === 1) return { originRepo, clone: first };
 	const idx = await select(
 		`Multiple clones — pick one to ${action}:`,
 		clones.map((c) => `${c.name}  ${paint.dim(cloneStatus(c.dir).branch)}`),
 	);
-	if (idx < 0) return null;
-	return { originRepo, clone: clones[idx] };
+	const chosen = idx < 0 ? undefined : clones[idx];
+	if (!chosen) return null;
+	return { originRepo, clone: chosen };
 }
 
 // ── copy the origin's session history into the clone ─────────────────────────
@@ -320,7 +408,7 @@ async function pickClone(action, name) {
  * fabricates a "resumed" conversation. On merge-back an unchanged copy adds nothing; if you
  * resumed one and added turns, it comes back as a separate session (see mergeBack).
  */
-function copyOriginHistory(originRepo, cloneDir) {
+function copyOriginHistory(originRepo: string, cloneDir: string): number {
 	const srcDir = sessionDirFor(originRepo);
 	if (!existsSync(srcDir)) return 0;
 	const destDir = sessionDirFor(cloneDir);
@@ -334,7 +422,7 @@ function copyOriginHistory(originRepo, cloneDir) {
 	for (const { f } of recent) {
 		const lines = readFileSync(join(srcDir, f), "utf8").split("\n");
 		try {
-			const header = JSON.parse(lines[0]);
+			const header = JSON.parse(lines[0] ?? "") as SessionHeader;
 			header.cwd = cloneDir;
 			lines[0] = JSON.stringify(header);
 		} catch {
@@ -355,7 +443,7 @@ function copyOriginHistory(originRepo, cloneDir) {
  *     self-contained session file, so the origin's original session (and the active leaf pi
  *     resumes) is never mutated. Costs a duplicated prefix; avoids hijacking the origin's leaf.
  */
-function mergeBack(cloneDir, originRepo) {
+function mergeBack(cloneDir: string, originRepo: string): number {
 	const srcDir = sessionDirFor(cloneDir);
 	if (!existsSync(srcDir)) return 0;
 	const destDir = sessionDirFor(originRepo);
@@ -363,19 +451,21 @@ function mergeBack(cloneDir, originRepo) {
 	let n = 0;
 	for (const f of readdirSync(srcDir)) {
 		if (!f.endsWith(".jsonl")) continue;
-		const src = readFileSync(join(srcDir, f), "utf8").split("\n").filter((l) => l.trim());
+		const src = readFileSync(join(srcDir, f), "utf8")
+			.split("\n")
+			.filter((l) => l.trim());
 		if (src.length === 0) continue;
 		const dest = join(destDir, f);
 
 		if (!existsSync(dest)) {
-			let header;
+			let header: SessionHeader;
 			try {
-				header = JSON.parse(src[0]);
+				header = JSON.parse(src[0] ?? "") as SessionHeader;
 			} catch {
 				continue;
 			}
 			header.cwd = originRepo;
-			writeFileSync(dest, [JSON.stringify(header), ...src.slice(1)].join("\n") + "\n");
+			writeFileSync(dest, `${[JSON.stringify(header), ...src.slice(1)].join("\n")}\n`);
 			n++;
 			continue;
 		}
@@ -383,32 +473,32 @@ function mergeBack(cloneDir, originRepo) {
 		// A copied-in origin session. If the clone added records (e.g. you resumed it there),
 		// write the clone's full session back as a NEW, self-contained file — leaving the origin's
 		// original file (and the leaf pi resumes) untouched. Unchanged copies add nothing.
-		const have = new Set();
+		const have = new Set<unknown>();
 		for (const l of readFileSync(dest, "utf8").split("\n")) {
 			if (!l.trim()) continue;
 			try {
-				have.add(JSON.parse(l).id);
+				have.add((JSON.parse(l) as SessionHeader).id);
 			} catch {
 				/* ignore */
 			}
 		}
 		const hasNew = src.slice(1).some((l) => {
 			try {
-				return !have.has(JSON.parse(l).id);
+				return !have.has((JSON.parse(l) as SessionHeader).id);
 			} catch {
 				return false;
 			}
 		});
 		if (!hasNew) continue;
-		let header;
+		let header: SessionHeader;
 		try {
-			header = JSON.parse(src[0]);
+			header = JSON.parse(src[0] ?? "") as SessionHeader;
 		} catch {
 			continue;
 		}
 		const id = randomUUID();
 		const fname = `${new Date().toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`;
-		writeFileSync(join(destDir, fname), [JSON.stringify({ ...header, id, cwd: originRepo }), ...src.slice(1)].join("\n") + "\n");
+		writeFileSync(join(destDir, fname), `${[JSON.stringify({ ...header, id, cwd: originRepo }), ...src.slice(1)].join("\n")}\n`);
 		n++;
 	}
 	try {
@@ -425,7 +515,7 @@ function mergeBack(cloneDir, originRepo) {
  * (KAGE_CD_FILE set by `eval "$(kage shell-init)"`), hand it the origin path to cd into;
  * otherwise print a copy-pasteable `cd` and how to enable the auto version.
  */
-function leaveClone(originRepo) {
+function leaveClone(originRepo: string): void {
 	const f = process.env.KAGE_CD_FILE;
 	if (f) {
 		try {
@@ -440,24 +530,25 @@ function leaveClone(originRepo) {
 	info(paint.dim(`      enable auto cd-back: add  eval "$(kage shell-init)"  to your ~/.zshrc`));
 }
 
-function launchPi(cwd, args) {
+function launchPi(cwd: string, args: string[]): void {
 	const r = spawnSync("pi", args, { cwd, stdio: "inherit" });
 	if (r.error) {
-		if (r.error.code === "ENOENT") die("pi not found (make sure it is installed and on your PATH)");
-		die(`failed to launch pi: ${r.error.message}`);
+		const err = r.error as NodeJS.ErrnoException;
+		if (err.code === "ENOENT") die("pi not found (make sure it is installed and on your PATH)");
+		die(`failed to launch pi: ${err.message}`);
 	}
 }
 
 // ── subcommands ───────────────────────────────────────────────────────────────
-async function cmdNew(argv) {
+async function cmdNew(argv: string[]): Promise<void> {
 	const { positional, flags } = parseArgs(argv);
-	let path = positional[0];
+	const path = positional[0];
 
 	// Interactive launcher: `kage` with no args, inside a repo that already has clones.
-	if (!path && !flags.name && process.stdin.isTTY) {
+	if (!path && !boolFlag(flags, "name") && process.stdin.isTTY) {
 		const repoRoot = repoTopLevel(process.cwd());
 		const clones = repoRoot ? listClones(repoRoot) : [];
-		if (clones.length > 0) {
+		if (repoRoot && clones.length > 0) {
 			const labels = [
 				"＋ Create a new shadow clone",
 				...clones.map((c) => {
@@ -470,12 +561,8 @@ async function cmdNew(argv) {
 			if (idx < 0) return info("cancelled");
 			if (idx > 0) {
 				const clone = clones[idx - 1];
-				const act = await select(`${clone.name}:`, [
-					"Enter (resume pi)",
-					"Finish (merge memory & remove)",
-					"Remove (discard)",
-					"Cancel",
-				]);
+				if (!clone) return info("cancelled");
+				const act = await select(`${clone.name}:`, ["Enter (resume pi)", "Finish (merge memory & remove)", "Remove (discard)", "Cancel"]);
 				if (act === 0) return launchPi(clone.dir, ["-c"]);
 				if (act === 1) return cmdFinish([clone.name]);
 				if (act === 2) return cmdRm([clone.name]);
@@ -494,7 +581,7 @@ async function cmdNew(argv) {
 	// Resolve the clone name: explicit --name wins; otherwise show the full folder name with
 	// the fixed "<repo>--" prefix in the prompt and an editable default suffix — press Enter to
 	// accept, or edit the suffix (non-interactive falls back to the default).
-	let name = typeof flags.name === "string" && flags.name ? flags.name : "";
+	let name = strFlag(flags, "name") ?? "";
 	if (!name) {
 		const def = tsName();
 		const prompt = `Kage name: ${basename(repoRoot)}--`;
@@ -509,7 +596,7 @@ async function cmdNew(argv) {
 
 	// kage does NOT create a branch — the clone stays on the origin's current branch.
 	const histN = copyOriginHistory(repoRoot, cloneDir);
-	const marker = {
+	const marker: Marker = {
 		originRepo: repoRoot,
 		name: safe,
 		createdAt: new Date().toISOString(),
@@ -529,11 +616,11 @@ async function cmdNew(argv) {
 	info(`↩︎  left the clone's pi. To finish: ${paint.bold(`kage finish ${safe}`)}`);
 }
 
-async function cmdFinish(argv) {
+async function cmdFinish(argv: string[]): Promise<void> {
 	const { positional, flags } = parseArgs(argv);
-	const force = !!flags.force;
-	const pr = !!flags.pr;
-	const push = pr || !!flags.push; // --pr implies --push
+	const force = boolFlag(flags, "force");
+	const pr = boolFlag(flags, "pr");
+	const push = pr || boolFlag(flags, "push"); // --pr implies --push
 	const picked = await pickClone("finish", positional[0]);
 	if (!picked) return info("cancelled");
 	const { originRepo, clone } = picked;
@@ -601,9 +688,9 @@ async function cmdFinish(argv) {
 	if (insideClone) leaveClone(originRepo);
 }
 
-async function cmdRm(argv) {
+async function cmdRm(argv: string[]): Promise<void> {
 	const { positional, flags } = parseArgs(argv);
-	const force = !!flags.force;
+	const force = boolFlag(flags, "force");
 	const picked = await pickClone("remove", positional[0]);
 	if (!picked) return info("cancelled");
 	const { originRepo, clone } = picked;
@@ -632,20 +719,23 @@ async function cmdRm(argv) {
 	if (insideClone) leaveClone(originRepo);
 }
 
-function cmdList(argv) {
+function cmdList(argv: string[]): void {
 	const { flags } = parseArgs(argv);
 	const here = repoTopLevel(process.cwd());
 	if (!here) die("not a git repository");
 	// Works from inside a clone too: resolve to the origin via the marker, then list its clones.
 	const repoRoot = readMarker(here)?.originRepo || here;
 	const clones = listClones(repoRoot);
-	if (clones.length === 0) return info("No shadow clones.");
+	if (clones.length === 0) {
+		info("No shadow clones.");
+		return;
+	}
 
 	info(paint.bold(`Shadow clones of ${basename(repoRoot)}:`));
 	info("");
 	for (const c of clones) {
 		const s = cloneStatus(c.dir);
-		const pr = flags.pr ? prInfo(c.dir, s.branch) : undefined;
+		const pr = boolFlag(flags, "pr") ? prInfo(c.dir, s.branch) : undefined;
 
 		// header: status glyph · name · branch · age
 		const glyph = s.dirty ? paint.yellow("●") : isSafeToClean(s) ? paint.green("✓") : paint.cyan("·");
@@ -653,7 +743,7 @@ function cmdList(argv) {
 		info(`  ${glyph} ${paint.bold(c.name)}  ${paint.cyan(s.branch)}  ${age}`);
 
 		// detail: working-tree state · sync · PR · safe-to-clean
-		const parts = [];
+		const parts: string[] = [];
 		if (s.dirty) {
 			let d = `${s.dirtyCount} changed`;
 			if (s.added || s.removed) d += ` (${paint.green(`+${s.added}`)} ${paint.red(`-${s.removed}`)})`;
@@ -663,7 +753,7 @@ function cmdList(argv) {
 		}
 		if (!s.hasUpstream) parts.push(paint.dim("not pushed"));
 		else {
-			const sync = [];
+			const sync: string[] = [];
 			if (s.ahead) sync.push(`↑${s.ahead}`);
 			if (s.behind) sync.push(`↓${s.behind}`);
 			parts.push(sync.length ? sync.join(" ") : paint.dim("in sync"));
@@ -681,16 +771,17 @@ function cmdList(argv) {
 	info(paint.dim("  finish <name> to merge & remove · rm <name> to discard · status --pr for PR status"));
 }
 
-function prState(pr) {
-	const f = { OPEN: paint.green, MERGED: paint.magenta, CLOSED: paint.red }[pr.state] || paint.dim;
+const PR_COLORS: Record<string, Paint> = { OPEN: paint.green, MERGED: paint.magenta, CLOSED: paint.red };
+function prState(pr: Pr): string {
+	const f = PR_COLORS[pr.state] ?? paint.dim;
 	return f(`PR #${pr.number} ${pr.state.toLowerCase()}`);
 }
 
-function cmdPull(argv) {
+function cmdPull(argv: string[]): void {
 	const { positional } = parseArgs(argv);
 	const cloneDir = repoTopLevel(process.cwd());
-	const marker = cloneDir && readMarker(cloneDir);
-	if (!marker) die("kage pull only runs inside a clone (edit the origin directly otherwise)");
+	const marker = cloneDir ? readMarker(cloneDir) : undefined;
+	if (!cloneDir || !marker) die("kage pull only runs inside a clone (edit the origin directly otherwise)");
 	if (positional.length === 0) die("usage: kage pull <relative-path> [more paths...]");
 	const originRepo = marker.originRepo;
 	const cloneRoot = cloneDir.endsWith(sep) ? cloneDir : cloneDir + sep;
@@ -746,7 +837,7 @@ elif [ -n "$BASH_VERSION" ]; then
   complete -F _kage kage
 fi`;
 
-function cmdClones() {
+function cmdClones(): void {
 	const repoRoot = repoTopLevel(process.cwd());
 	if (!repoRoot) return;
 	for (const c of listClones(repoRoot)) process.stdout.write(`${c.name}\n`);
@@ -795,7 +886,7 @@ Examples:
 Env:
   KAGE_SESSIONS_DIR   pi session storage (default: ~/.pi/agent/sessions)`;
 
-async function main() {
+async function main(): Promise<void> {
 	const [sub, ...rest] = process.argv.slice(2);
 	switch (sub) {
 		case undefined:
@@ -811,8 +902,18 @@ async function main() {
 		case "pull":
 			return cmdPull(rest);
 		case "shell-init":
-		case "completion":
-			return process.stdout.write(SHELL_INIT + "\n");
+		case "completion": {
+			process.stdout.write(`${SHELL_INIT}\n`);
+			// When a human runs this directly (stdout is a TTY, not captured by `$(...)`),
+			// the script just scrolled past unused — show how to actually activate it.
+			// During `eval "$(kage shell-init)"` stdout is a pipe, so this stays silent.
+			if (process.stdout.isTTY) {
+				info("");
+				info(paint.dim("# ↑ the script above isn't run by printing it — activate it with:"));
+				info(`  eval "$(kage shell-init)"   ${paint.dim("# add this line to your ~/.zshrc or ~/.bashrc")}`);
+			}
+			return;
+		}
 		case "__clones":
 			return cmdClones();
 		case "-h":

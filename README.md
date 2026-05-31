@@ -62,7 +62,7 @@ From source:
 
 ```bash
 git clone https://github.com/kid7st/kage
-cd kage && npm link
+cd kage && npm install && npm link   # `npm install` builds bin/kage.mjs from src/ (TypeScript)
 ```
 
 Requires **git**, [**pi**](https://github.com/earendil-works), and **Node ≥ 18** on your `PATH`.
@@ -168,9 +168,24 @@ pass `--push` / `--pr` / `--force`.
 
 ## Development
 
+The CLI and its tests are written in TypeScript and compiled with `tsc`:
+
+- `src/kage.mts` → `bin/kage.mjs` — a single, zero-runtime-dependency file (the only thing the
+  install script + npm package ship).
+- `test/kage.test.mts` → `dist/kage.test.mjs` — black-box `node:test` smoke tests that spawn the
+  built CLI (compiled to `dist/` so they run on every Node in CI, no TS loader needed).
+
+`bin/` and `dist/` are build artifacts — both gitignored. `bin/` is produced on `npm install`
+(via `prepare`), so `npm link` from a clone just works.
+
+Linting/formatting is handled by [Biome](https://biomejs.dev) — a dev-only dependency that never
+ships in the package, so the zero-runtime-dependency artifact is unaffected.
+
 ```bash
-npm run lint     # syntax check
-npm test         # node:test smoke tests (temp repos, no network)
+npm run build    # tsc: src/kage.mts -> bin/kage.mjs
+npm run format   # biome: auto-format + safe lint fixes
+npm run lint     # biome (lint + format check) + tsc type check (src + test)
+npm test         # build CLI + tests, then run node:test smoke tests (temp repos, no network)
 ```
 
 Releases publish automatically: bump `version` in `package.json`, then
