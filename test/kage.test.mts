@@ -41,6 +41,13 @@ function fakePiPath(root: string): string {
 	return `${bin}:${process.env.PATH}`;
 }
 
+/** Drop a fake `gh` into the fake-bin dir (already on PATH via fakePiPath) that echoes fixed JSON. */
+function fakeGh(root: string, json: string): void {
+	const gh = join(root, "bin", "gh");
+	writeFileSync(gh, `#!/bin/sh\ncat <<'JSON'\n${json}\nJSON\n`);
+	chmodSync(gh, 0o755);
+}
+
 const enc = (abs: string): string => `--${abs.replace(/^\//, "").replace(/\//g, "-")}--`;
 
 test("--help prints usage", () => {
@@ -112,6 +119,56 @@ test("new creates a clone, list shows it, finish removes it", () => {
 		const finish = run(["finish", "t1", "--force"], { cwd: repo, env });
 		assert.equal(finish.status, 0);
 		assert.ok(!existsSync(clone), "clone dir should be removed");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("--name=value (equals form) is parsed and names the clone folder", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	const clone = join(root, "repo--eqname");
+	try {
+		const r = run(["--name=eqname"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.ok(existsSync(clone), "the `--name=eqname` equals-form should name the folder repo--eqname");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("status --pr surfaces PR state via gh", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	fakeGh(root, '{"state":"OPEN","number":7,"url":"https://example.com/pr/7"}');
+	try {
+		run(["--name", "prtest"], { cwd: repo, env });
+		const r = run(["status", "--pr"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr);
+		assert.match(r.stderr, /PR #7 open/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("status --pr ignores gh output that isn't a valid PR shape (isPr rejects, no crash)", () => {
+	const root = tmp();
+	const repo = join(root, "repo");
+	mkdirSync(repo);
+	initRepo(repo);
+	const env = { ...process.env, PATH: fakePiPath(root), KAGE_SESSIONS_DIR: join(root, "sessions") };
+	fakeGh(root, '{"unexpected":"shape"}'); // valid JSON, wrong shape -> isPr() must reject it
+	try {
+		run(["--name", "prbad"], { cwd: repo, env });
+		const r = run(["status", "--pr"], { cwd: repo, env });
+		assert.equal(r.status, 0, r.stderr); // dashboard still renders
+		assert.doesNotMatch(r.stderr, /PR #/); // ...just without a PR line
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
