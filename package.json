@@ -46,7 +46,7 @@
     "prepublishOnly": "npm run lint && npm test"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.16",
+    "@biomejs/biome": "2.6.4",
     "@types/node": "^18.19.0",
     "typescript": "^5.7.3"
   }
